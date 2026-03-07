@@ -316,7 +316,7 @@ impl ContainerJobManager {
         token: &str,
         project_dir: Option<PathBuf>,
         mode: JobMode,
-        _mcp_servers: Option<Vec<String>>,
+        mcp_servers: Option<Vec<String>>,
         max_iterations: Option<u32>,
     ) -> Result<(), OrchestratorError> {
         // Connect to Docker (reuses cached connection)
@@ -351,6 +351,41 @@ impl ContainerJobManager {
             let canonical = validate_bind_mount_path(dir, job_id)?;
             binds.push(format!("{}:/workspace:rw", canonical.display()));
             env_vec.push("IRONCLAW_WORKSPACE=/workspace".to_string());
+        }
+
+        // Mount worker MCP config — filtered per-job if mcp_servers is specified,
+        // otherwise mount the full master config.
+        let mcp_config_host = std::path::Path::new("/opt/ironclaw/config/worker/mcp-servers.json");
+        match generate_worker_mcp_config(mcp_config_host, mcp_servers.as_deref(), job_id)? {
+            Some(config_path) => {
+                binds.push(format!(
+                    "{}:/home/sandbox/.ironclaw/mcp-servers.json:ro",
+                    config_path.display()
+                ));
+                tracing::debug!(
+                    job_id = %job_id,
+                    filtered = mcp_servers.is_some(),
+                    "Mounted MCP config into container"
+                );
+            }
+            None => {
+                tracing::debug!(
+                    job_id = %job_id,
+                    "No MCP config to mount (master missing or empty filter list)"
+                );
+            }
+        }
+
+        // Mount SOUL.md for agent identity/context inside the worker
+        let soul_host = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/home/deploy"))
+            .join(".ironclaw/SOUL.md");
+        if soul_host.exists() {
+            binds.push(format!(
+                "{}:/home/sandbox/.ironclaw/SOUL.md:ro",
+                soul_host.display()
+            ));
+            tracing::debug!(job_id = %job_id, "Mounted SOUL.md into container");
         }
 
         // Claude Code mode: auth + tool allowlist.
@@ -665,7 +700,6 @@ impl ContainerJobManager {
 ///
 /// Currently used only in tests; will be wired into `create_job_inner` when
 /// conditional MCP mount logic is added.
-#[allow(dead_code)]
 fn generate_worker_mcp_config(
     master_path: &std::path::Path,
     server_names: Option<&[String]>,

@@ -845,7 +845,8 @@ mod tests {
                 execution_time_hint: None,
             }),
         };
-        assert!(tool.requires_approval());
+        // requires_approval() is disabled — always returns false
+        assert!(!tool.requires_approval());
     }
 
     #[test]

@@ -277,12 +277,15 @@ mod tests {
             .and_then(|p| p.get("data"))
             .expect("data schema missing");
 
-        // Data is intentionally freeform (no "type" constraint) for OpenAI
-        // compatibility. OpenAI rejects union types containing "array" unless
-        // "items" is also specified.
+        // Data accepts any JSON value. The schema declares all JSON types
+        // plus "items" for array compatibility with strict validators.
         assert!(
-            data.get("type").is_none(),
-            "data schema should not have a 'type' to be freeform for OpenAI compatibility"
+            data.get("type").is_some(),
+            "data schema should have a 'type' array for strict validator compatibility"
+        );
+        assert!(
+            data.get("items").is_some(),
+            "data schema should have 'items' for array-type compatibility"
         );
     }
 }

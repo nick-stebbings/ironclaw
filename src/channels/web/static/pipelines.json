@@ -1,0 +1,57 @@
+{
+  "timestamp": "2026-03-23T03:07:09.414771+00:00",
+  "pipelines": [
+    {
+      "name": "Workflow Scout",
+      "schedule": "Hourly 8am-8pm NZDT",
+      "last_run": "2026-03-23T03:00:01+01:00",
+      "status": "ok"
+    },
+    {
+      "name": "Workflow Prototyper",
+      "schedule": "Hourly 9am-9pm NZDT",
+      "last_run": "2026-03-23T04:01:32+01:00",
+      "status": "ok"
+    },
+    {
+      "name": "Reddit Outreach",
+      "schedule": "10am Mon-Fri NZDT",
+      "last_run": "2026-03-23T03:04:27+01:00",
+      "status": "ok"
+    },
+    {
+      "name": "Calendar Booking",
+      "schedule": "10pm Sun-Thu NZDT",
+      "last_run": "2026-03-22T09:00:02+01:00",
+      "status": "ok"
+    },
+    {
+      "name": "Content Pipeline",
+      "schedule": "10am Monday NZDT",
+      "last_run": "never",
+      "status": "no_log"
+    },
+    {
+      "name": "Pipeline Monitor",
+      "schedule": "Every 15min",
+      "last_run": "2026-03-23T04:00:01+01:00",
+      "status": "ok"
+    },
+    {
+      "name": "Credential Check",
+      "schedule": "8am daily NZDT",
+      "last_run": "NPM Token                ",
+      "status": "ok"
+    },
+    {
+      "name": "Offsite Backup",
+      "schedule": "4pm daily NZDT",
+      "last_run": "never",
+      "status": "no_log"
+    }
+  ],
+  "ironclaw_status": "active",
+  "tools_loaded": 269,
+  "mcp_servers": 11,
+  "skills_count": 45
+}

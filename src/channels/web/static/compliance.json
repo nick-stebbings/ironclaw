@@ -1,0 +1,248 @@
+{
+  "scan_timestamp": "2026-03-23T03:07:07Z",
+  "categories": {
+    "auth_access": {
+      "pg_hba_no_trust": {
+        "status": "pass",
+        "detail": "All entries use scram-sha-256",
+        "frameworks": [
+          "SOC2",
+          "GDPR"
+        ],
+        "remediation": null
+      },
+      "rbac_roles": {
+        "status": "fail",
+        "detail": "Non-postgres superusers found: ironclaw_app",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": "Revoke superuser from: ironclaw_app"
+      },
+      "tailscale_active": {
+        "status": "pass",
+        "detail": "Tailscale online, 3 peers",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": null
+      },
+      "slack_allowlist": {
+        "status": "pass",
+        "detail": "Allowlist active with 2 allowed senders",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": null
+      }
+    },
+    "encryption": {
+      "postgres_ssl": {
+        "status": "pass",
+        "detail": "SSL enabled",
+        "frameworks": [
+          "SOC2",
+          "GDPR"
+        ],
+        "remediation": null
+      },
+      "disk_encryption": {
+        "status": "fail",
+        "detail": "No LUKS encryption on any partition",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": "Enable LUKS full-disk encryption or Hetzner installimage with encryption"
+      },
+      "temporal_mtls": {
+        "status": "fail",
+        "detail": "No mTLS configured for Temporal",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": "Add TLS cert/key env vars to Temporal docker-compose.yml"
+      },
+      "redis_tls": {
+        "status": "fail",
+        "detail": "Redis TLS not enabled",
+        "frameworks": [
+          "SOC2",
+          "GDPR"
+        ],
+        "remediation": "Configure TLS in Redis/Valkey"
+      }
+    },
+    "audit_trail": {
+      "llm_call_logging": {
+        "status": "pass",
+        "detail": "22 LLM calls logged in last 24h",
+        "frameworks": [
+          "ISO42001",
+          "SOC2"
+        ],
+        "remediation": null
+      },
+      "model_versioning": {
+        "status": "pass",
+        "detail": "All 22 recent calls have model recorded",
+        "frameworks": [
+          "ISO42001"
+        ],
+        "remediation": null
+      },
+      "temporal_retention": {
+        "status": "partial",
+        "detail": "Could not parse retention from namespace describe",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": null
+      }
+    },
+    "data_privacy": {
+      "pii_safety_config": {
+        "status": "pass",
+        "detail": "SAFETY_INJECTION_CHECK_ENABLED=true",
+        "frameworks": [
+          "GDPR"
+        ],
+        "remediation": null
+      },
+      "vector_column_inventory": {
+        "status": "pass",
+        "detail": "1 vector columns identified: memory_chunks.embedding",
+        "frameworks": [
+          "GDPR"
+        ],
+        "remediation": null
+      },
+      "data_retention_policy": {
+        "status": "pass",
+        "detail": "Backup retention set to 30 days",
+        "frameworks": [
+          "GDPR",
+          "SOC2"
+        ],
+        "remediation": null
+      }
+    },
+    "backup_dr": {
+      "backup_freshness": {
+        "status": "pass",
+        "detail": "Newest backup is 2h old (< 48h)",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": null
+      },
+      "offsite_backup": {
+        "status": "fail",
+        "detail": "No off-site backup configured",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": "Configure S3/Backblaze remote backup and create /opt/ironclaw/config/backup-offsite.conf"
+      },
+      "restore_tested": {
+        "status": "fail",
+        "detail": "No restore test log found",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": "Perform a restore test and log results to /opt/ironclaw/logs/restore-test.log"
+      }
+    },
+    "network": {
+      "no_wildcard_bind": {
+        "status": "fail",
+        "detail": "Services on 0.0.0.0: 0.0.0.0:2222",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": "Rebind to 127.0.0.1 or 100.115.60.62"
+      },
+      "supergateway_localhost": {
+        "status": "fail",
+        "detail": "Exposed on 0.0.0.0: 8061 8062 8063 8064 8065 8066 8067 8068",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": "Bind supergateway ports to 127.0.0.1"
+      },
+      "firewall_active": {
+        "status": "fail",
+        "detail": "No iptables INPUT rules found",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": "Configure iptables or ufw firewall rules"
+      }
+    },
+    "supply_chain": {
+      "trivy_installed": {
+        "status": "fail",
+        "detail": "trivy not installed",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": "Install: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh"
+      },
+      "base_image_age": {
+        "status": "pass",
+        "detail": "Worker image is 2 days old (< 90)",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": null
+      },
+      "cargo_audit": {
+        "status": "fail",
+        "detail": "cargo-audit not installed",
+        "frameworks": [
+          "SOC2"
+        ],
+        "remediation": "Install: cargo install cargo-audit"
+      }
+    },
+    "ai_governance": {
+      "reasoning_chain": {
+        "status": "partial",
+        "detail": "No job actions in last 7 days (may be normal if no jobs ran)",
+        "frameworks": [
+          "ISO42001"
+        ],
+        "remediation": null
+      },
+      "hitl_controls": {
+        "status": "pass",
+        "detail": "Slack sender allowlist active + approval system configured",
+        "frameworks": [
+          "ISO42001"
+        ],
+        "remediation": null
+      },
+      "soul_md_present": {
+        "status": "pass",
+        "detail": "SOUL.md present (9983 bytes), mounted into worker containers",
+        "frameworks": [
+          "ISO42001"
+        ],
+        "remediation": null
+      },
+      "model_versioning": {
+        "status": "pass",
+        "detail": "Models in use: moonshotai/kimi-k2.5",
+        "frameworks": [
+          "ISO42001"
+        ],
+        "remediation": null
+      }
+    }
+  },
+  "summary": {
+    "pass": 14,
+    "fail": 11,
+    "partial": 2,
+    "total": 27
+  }
+}

@@ -288,7 +288,7 @@ pub enum Command {
         orchestrator_url: String,
 
         /// Maximum iterations before stopping.
-        #[arg(long, default_value = "50")]
+        #[arg(long, default_value = "10", env = "IRONCLAW_MAX_ITERATIONS")]
         max_iterations: u32,
     },
 

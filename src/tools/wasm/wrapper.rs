@@ -292,7 +292,8 @@ impl near::agent::host::Host for StoreData {
             .record_http_request()
             .map_err(|e| format!("Rate limit exceeded: {}", e))?;
 
-        // Parse headers and inject credentials into header values
+        // Parse headers BEFORE credential injection for leak detection.
+        // Scanning after injection would flag host-injected secrets as exfiltration.
         let raw_headers: HashMap<String, String> =
             serde_json::from_str(&headers_json).unwrap_or_default();
 
@@ -330,7 +331,7 @@ impl near::agent::host::Host for StoreData {
         let mut url = injected_url;
 
         // Inject pre-resolved host credentials (Bearer tokens, API keys, etc.)
-        // based on the request's target host.
+        // after the leak scan so host-injected secrets don't trigger false positives.
         if let Some(host) = extract_host_from_url(&url) {
             self.inject_host_credentials(&host, &mut headers, &mut url);
         }

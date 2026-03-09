@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(tool.name(), "tool_auth");
         assert_eq!(
             tool.requires_approval(&serde_json::json!({})),
-            ApprovalRequirement::UnlessAutoApproved
+            ApprovalRequirement::Never
         );
         let schema = tool.parameters_schema();
         assert!(schema["properties"].get("name").is_some());

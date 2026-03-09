@@ -569,9 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn test_requires_approval_always_false() {
-        // requires_approval() is disabled — MCP servers are operator-configured
-        // and trusted, and Slack channel has no interactive approval mechanism.
+    fn test_requires_approval_when_destructive() {
         let tool = McpTool {
             name: "delete_all".to_string(),
             description: "Deletes everything".to_string(),
@@ -581,7 +579,7 @@ mod tests {
                 ..Default::default()
             }),
         };
-        assert!(!tool.requires_approval());
+        assert!(tool.requires_approval());
     }
 
     #[test]

@@ -1058,15 +1058,11 @@ mod tests {
             .and_then(|p| p.get("body"))
             .expect("body schema missing");
 
-        // Body accepts any JSON value. The schema declares all JSON types
-        // plus "items" for array compatibility with strict validators.
+        // Body accepts any JSON value via freeform schema (no "type" field).
+        // This is compatible with OpenAI strict mode which rejects union type arrays.
         assert!(
-            body.get("type").is_some(),
-            "body schema should have a 'type' array for strict validator compatibility"
-        );
-        assert!(
-            body.get("items").is_some(),
-            "body schema should have 'items' for array-type compatibility"
+            body.get("type").is_none(),
+            "body schema should be freeform (no type field) for OpenAI compatibility"
         );
     }
 

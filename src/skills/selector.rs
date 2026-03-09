@@ -172,6 +172,7 @@ mod tests {
                     tags: tag_vec,
                     max_context_tokens: 1000,
                 },
+                model: None,
                 metadata: None,
             },
             prompt_content: "Test prompt".to_string(),

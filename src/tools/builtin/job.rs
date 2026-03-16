@@ -1613,6 +1613,8 @@ mod tests {
                 false,
                 JobMode::Worker,
                 vec![],
+                None,
+                None,
                 &JobContext::default(),
             )
             .await;

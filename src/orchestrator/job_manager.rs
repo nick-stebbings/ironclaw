@@ -218,6 +218,8 @@ pub struct ContainerJobManager {
     pub(crate) containers: Arc<RwLock<HashMap<Uuid, ContainerHandle>>>,
     /// Cached Docker connection (created on first use).
     docker: Arc<RwLock<Option<bollard::Docker>>>,
+    /// Per-job model preference (e.g. "premium", "claude", "default").
+    model_preferences: Arc<RwLock<HashMap<Uuid, String>>>,
 }
 
 impl ContainerJobManager {
@@ -227,6 +229,7 @@ impl ContainerJobManager {
             token_store,
             containers: Arc::new(RwLock::new(HashMap::new())),
             docker: Arc::new(RwLock::new(None)),
+            model_preferences: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 

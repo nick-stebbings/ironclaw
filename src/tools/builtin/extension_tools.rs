@@ -657,9 +657,10 @@ mod tests {
             manager: test_manager_stub(),
         };
         assert_eq!(tool.name(), "tool_auth");
+        // Non-gateway mode requires approval; gateway mode returns Never.
         assert_eq!(
             tool.requires_approval(&serde_json::json!({})),
-            ApprovalRequirement::Never
+            ApprovalRequirement::UnlessAutoApproved
         );
         let schema = tool.parameters_schema();
         assert!(schema["properties"].get("name").is_some());

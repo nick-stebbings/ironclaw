@@ -326,11 +326,7 @@ impl ContainerJobManager {
         let docker = self.docker().await?;
 
         // Build container configuration
-        let orchestrator_host = if cfg!(target_os = "linux") {
-            "172.17.0.1"
-        } else {
-            "host.docker.internal"
-        };
+        let orchestrator_host = "127.0.0.1";
 
         let orchestrator_url = format!(
             "http://{}:{}",
@@ -425,7 +421,7 @@ impl ContainerJobManager {
             binds: if binds.is_empty() { None } else { Some(binds) },
             memory: Some((memory_mb * 1024 * 1024) as i64),
             cpu_shares: Some(self.config.cpu_shares as i64),
-            network_mode: Some("bridge".to_string()),
+            network_mode: Some("host".to_string()),
             extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
             cap_drop: Some(vec!["ALL".to_string()]),
             cap_add: Some(vec!["CHOWN".to_string()]),
@@ -648,6 +644,7 @@ impl ContainerJobManager {
 
 
         self.containers.write().await.remove(&job_id);
+        self.model_preferences.write().await.remove(&job_id);
     }
 
     /// Update the worker-reported status for a job.

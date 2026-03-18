@@ -179,7 +179,15 @@ impl Agent {
         // Build system prompts once for this turn. Two variants: with tools
         // (normal iterations) and without (force_text final iteration).
         let initial_tool_defs = self.tools().tool_definitions().await;
-        let initial_tool_defs = self.apply_channel_routing(&message.channel, initial_tool_defs);
+        // Resolve the routing channel: prefer the Slack channel ID/name from
+        // message metadata (WASM channels set this), fall back to transport name.
+        let routing_channel = message
+            .metadata
+            .get("channel")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&message.channel)
+            .to_string();
+        let initial_tool_defs = self.apply_channel_routing(&routing_channel, initial_tool_defs);
         let initial_tool_defs = if !active_skills.is_empty() {
             crate::skills::attenuate_tools(&initial_tool_defs, &active_skills).tools
         } else {
@@ -312,7 +320,13 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
         // Refresh tool definitions each iteration so newly built tools become visible
         let tool_defs = self.agent.tools().tool_definitions().await;
-        let tool_defs = self.agent.apply_channel_routing(&self.message.channel, tool_defs);
+        let routing_channel = self
+            .message
+            .metadata
+            .get("channel")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&self.message.channel);
+        let tool_defs = self.agent.apply_channel_routing(routing_channel, tool_defs);
 
         // Apply trust-based tool attenuation if skills are active.
         let tool_defs = if !self.active_skills.is_empty() {

@@ -355,19 +355,32 @@ impl near::agent::channel_host::Host for ChannelStoreData {
 
         let mut url = injected_url;
 
-        // Leak scan runs on WASM-provided values BEFORE host credential injection.
-        // This prevents false positives where the host-injected Bearer token
-        // (e.g., xoxb- Slack token) triggers the leak detector — WASM never saw
-        // the real value, so scanning the pre-injection state is correct.
+        // Leak scan runs on the ORIGINAL WASM-provided values (before ANY
+        // credential injection) to prevent false positives. Host-injected
+        // tokens (e.g., xoxb- Slack bot token) would otherwise trigger the
+        // leak detector — WASM never saw the real value.
         let leak_detector = LeakDetector::new();
-        let header_vec: Vec<(String, String)> = headers
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        {
+            let raw_url_for_scan = &url;
+            let raw_headers_map: std::collections::HashMap<String, String> =
+                serde_json::from_str(&headers_json).unwrap_or_default();
 
-        leak_detector
-            .scan_http_request(&url, &header_vec, body.as_deref())
-            .map_err(|e| format!("Potential secret leak blocked: {}", e))?;
+            // Debug: log what the WASM is sending as Authorization header
+            if let Some(auth) = raw_headers_map.get("Authorization").or_else(|| raw_headers_map.get("authorization")) {
+                let preview = if auth.len() > 30 { &auth[..30] } else { auth };
+                tracing::warn!(
+                    auth_preview = %preview,
+                    auth_len = auth.len(),
+                    "WASM-provided Authorization header (pre-injection)"
+                );
+            }
+
+            let raw_header_vec: Vec<(String, String)> =
+                raw_headers_map.into_iter().collect();
+            leak_detector
+                .scan_http_request(raw_url_for_scan, &raw_header_vec, body.as_deref())
+                .map_err(|e| format!("Potential secret leak blocked: {}", e))?;
+        }
 
         // Inject pre-resolved host credentials (Bearer tokens, API keys, etc.)
         // after the leak scan so host-injected secrets don't trigger false positives.

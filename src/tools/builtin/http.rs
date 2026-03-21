@@ -114,7 +114,10 @@ pub(crate) fn validate_url(url: &str) -> Result<reqwest::Url, ToolError> {
     let parsed = reqwest::Url::parse(url)
         .map_err(|e| ToolError::InvalidParameters(format!("invalid URL: {}", e)))?;
 
-    if parsed.scheme() != "https" {
+    // Allow localhost/private IPs when ALLOW_LOCAL_HTTP is set (for internal service calls)
+    let allow_local = std::env::var("ALLOW_LOCAL_HTTP").unwrap_or_default() == "true";
+
+    if !allow_local && parsed.scheme() != "https" {
         return Err(ToolError::NotAuthorized(
             "only https URLs are allowed".to_string(),
         ));
@@ -125,7 +128,7 @@ pub(crate) fn validate_url(url: &str) -> Result<reqwest::Url, ToolError> {
         .ok_or_else(|| ToolError::InvalidParameters("URL missing host".to_string()))?;
 
     let host_lower = host.to_lowercase();
-    if host_lower == "localhost" || host_lower.ends_with(".localhost") {
+    if !allow_local && (host_lower == "localhost" || host_lower.ends_with(".localhost")) {
         return Err(ToolError::NotAuthorized(
             "localhost is not allowed".to_string(),
         ));
@@ -133,6 +136,7 @@ pub(crate) fn validate_url(url: &str) -> Result<reqwest::Url, ToolError> {
 
     // Check literal IP addresses
     if let Ok(ip) = host.parse::<IpAddr>()
+        && !allow_local
         && is_disallowed_ip(&ip)
     {
         return Err(ToolError::NotAuthorized(
@@ -843,6 +847,12 @@ impl Tool for HttpTool {
         // GET requests (or missing method, since GET is the default) are low-risk
         let method = params["method"].as_str().unwrap_or("GET");
         if method.eq_ignore_ascii_case("GET") {
+            return ApprovalRequirement::Never;
+        }
+
+        // When ALLOW_LOCAL_HTTP is set, skip approval for all HTTP requests
+        // (the env var is an explicit operator opt-in for local service calls)
+        if std::env::var("ALLOW_LOCAL_HTTP").unwrap_or_default() == "true" {
             return ApprovalRequirement::Never;
         }
 

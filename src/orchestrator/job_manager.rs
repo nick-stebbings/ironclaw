@@ -387,6 +387,16 @@ impl ContainerJobManager {
             tracing::debug!(job_id = %job_id, "Mounted SOUL.md into container");
         }
 
+        // Mount host scripts directory read-only into workers
+        // so workers can run pre-built scripts (e.g. run-reddit-outreach.sh)
+        let scripts_dir = std::path::Path::new("/opt/ironclaw/scripts");
+        if scripts_dir.exists() {
+            binds.push(format!(
+                "{}:/opt/scripts:ro",
+                scripts_dir.display()
+            ));
+        }
+
         // Claude Code mode: auth + tool allowlist.
         //
         // Auth strategies (first match wins):

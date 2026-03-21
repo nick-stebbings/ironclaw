@@ -325,7 +325,9 @@ impl ToolRegistry {
     /// capabilities needed for the software builder. Call this after
     /// `register_builtin_tools()` to enable code generation features.
     pub fn register_dev_tools(&self) {
-        self.register_sync(Arc::new(ShellTool::new()));
+        self.register_sync(Arc::new(
+            ShellTool::new().with_timeout(std::time::Duration::from_secs(600)),
+        ));
         self.register_sync(Arc::new(ReadFileTool::new()));
         self.register_sync(Arc::new(WriteFileTool::new()));
         self.register_sync(Arc::new(ListDirTool::new()));

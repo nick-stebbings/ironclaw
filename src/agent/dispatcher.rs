@@ -473,6 +473,23 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             call_cost,
         );
 
+        // Persist LLM call to database for audit trail.
+        if let Some(store) = self.agent.store() {
+            let record = crate::history::LlmCallRecord {
+                job_id: None,
+                conversation_id: Some(self.thread_id),
+                provider: "main",
+                model: &model_name,
+                input_tokens: output.usage.input_tokens,
+                output_tokens: output.usage.output_tokens,
+                cost: call_cost,
+                purpose: None,
+            };
+            if let Err(e) = store.record_llm_call(&record).await {
+                tracing::debug!("Failed to persist LLM call: {}", e);
+            }
+        }
+
         Ok(output)
     }
 

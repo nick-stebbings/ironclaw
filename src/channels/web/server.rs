@@ -544,7 +544,9 @@ pub async fn start_server(
         .route("/i18n/index.js", get(i18n_index_handler))
         .route("/i18n/en.js", get(i18n_en_handler))
         .route("/i18n/zh-CN.js", get(i18n_zh_handler))
-        .route("/i18n-app.js", get(i18n_app_handler));
+        .route("/i18n-app.js", get(i18n_app_handler))
+        .route("/dashboard", get(dashboard_handler))
+        .route("/api/dashboard/{name}", get(dashboard_json_handler));
 
     // Project file serving (behind auth to prevent unauthorized file access).
     let projects = Router::new()
@@ -555,6 +557,10 @@ pub async fn start_server(
             auth_state.clone(),
             auth_middleware,
         ));
+
+    // Public file serving for screenshots/creatives (no auth — ephemeral preview images).
+    let screenshots = Router::new()
+        .route("/screenshots/{*path}", get(serve_screenshot_file));
 
     // CORS: restrict to same-origin by default. Only localhost/127.0.0.1
     // origins are allowed, since the gateway is a local-first service.
@@ -582,6 +588,7 @@ pub async fn start_server(
     let app = Router::new()
         .merge(public)
         .merge(statics)
+        .merge(screenshots)
         .merge(projects)
         .merge(protected)
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB max request body (image uploads)
@@ -679,6 +686,25 @@ async fn favicon_handler() -> impl IntoResponse {
         ],
         include_bytes!("static/favicon.ico").as_slice(),
     )
+}
+
+async fn dashboard_handler() -> impl IntoResponse {
+    axum::response::Html(include_str!("static/dashboard.html"))
+}
+
+async fn dashboard_json_handler(
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let path = match name.as_str() {
+        "credentials" => "/opt/ironclaw/logs/credential-health.json",
+        "compliance" => "/opt/ironclaw/logs/compliance.json",
+        "pipelines" => "/opt/ironclaw/logs/pipelines.json",
+        _ => return (StatusCode::NOT_FOUND, "Not found".to_string()).into_response(),
+    };
+    match tokio::fs::read_to_string(path).await {
+        Ok(content) => ([(header::CONTENT_TYPE, "application/json")], content).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "Data not available".to_string()).into_response(),
+    }
 }
 
 async fn i18n_index_handler() -> impl IntoResponse {
@@ -2387,6 +2413,65 @@ async fn serve_project_file(project_id: &str, path: &str) -> axum::response::Res
                 .first_or_octet_stream()
                 .to_string();
             ([(header::CONTENT_TYPE, mime)], contents).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "Not found").into_response(),
+    }
+}
+
+/// Serve files from the shared screenshots directory (no auth).
+/// Used for ad creative previews and UI component screenshots.
+/// Path: `~/.ironclaw/coding/projects/upstream/design-system/.tmp-screenshots/`
+async fn serve_screenshot_file(Path(path): Path<String>) -> axum::response::Response {
+    // Strip leading slash from wildcard capture (axum includes it).
+    let filename = path.trim_start_matches('/');
+
+    // Only allow simple filenames — no slashes, no path traversal.
+    if filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains("..")
+        || filename.is_empty()
+    {
+        return (StatusCode::BAD_REQUEST, "Invalid path").into_response();
+    }
+
+    let base = ironclaw_base_dir()
+        .join("coding")
+        .join("projects")
+        .join("upstream")
+        .join("design-system")
+        .join(".tmp-screenshots");
+
+    let file_path = base.join(filename);
+
+    // Canonicalize and verify containment.
+    let canonical = match file_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+    };
+    let base_canonical = match base.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return (StatusCode::NOT_FOUND, "Not found").into_response(),
+    };
+    if !canonical.starts_with(&base_canonical) {
+        return (StatusCode::FORBIDDEN, "Forbidden").into_response();
+    }
+
+    match tokio::fs::read(&canonical).await {
+        Ok(contents) => {
+            let mime = mime_guess::from_path(&canonical)
+                .first_or_octet_stream()
+                .to_string();
+            (
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (
+                        header::CACHE_CONTROL,
+                        "public, max-age=3600".to_string(),
+                    ),
+                ],
+                contents,
+            )
+                .into_response()
         }
         Err(_) => (StatusCode::NOT_FOUND, "Not found").into_response(),
     }

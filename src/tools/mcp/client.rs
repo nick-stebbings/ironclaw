@@ -152,6 +152,24 @@ impl McpClient {
         })
     }
 
+    /// Attach a session manager, rebuilding the HTTP transport so both the
+    /// client and the transport share the same session state.
+    ///
+    /// Without this, `Mcp-Session-Id` headers returned by the server during
+    /// `initialize` are silently discarded because the transport has no
+    /// session manager to store them in.
+    pub fn with_session_manager(mut self, session_manager: Arc<McpSessionManager>) -> Self {
+        // Rebuild the HTTP transport with the session manager attached.
+        let transport = HttpMcpTransport::new(
+            self.server_url.clone(),
+            self.server_name.clone(),
+        )
+        .with_session_manager(session_manager.clone());
+        self.transport = Arc::new(transport);
+        self.session_manager = Some(session_manager);
+        self
+    }
+
     /// Create a new authenticated MCP client.
     ///
     /// Use this for hosted MCP servers that require OAuth authentication.
@@ -217,19 +235,6 @@ impl McpClient {
             custom_headers,
             initialized: tokio::sync::OnceCell::new(),
         }
-    }
-
-    /// Attach a session manager to the **client** only.
-    ///
-    /// **Warning:** This does NOT wire the session manager into the underlying
-    /// `HttpMcpTransport`, so the transport will not capture `Mcp-Session-Id`
-    /// from responses. For production use, construct the transport with
-    /// `HttpMcpTransport::with_session_manager()` and pass it to
-    /// `new_with_transport()` instead. See `create_client_from_config()`.
-    #[cfg(test)]
-    pub fn with_session_manager(mut self, session_manager: Arc<McpSessionManager>) -> Self {
-        self.session_manager = Some(session_manager);
-        self
     }
 
     /// Get the server name.

@@ -366,7 +366,10 @@ impl near::agent::channel_host::Host for ChannelStoreData {
                 serde_json::from_str(&headers_json).unwrap_or_default();
 
             // Debug: log what the WASM is sending as Authorization header
-            if let Some(auth) = raw_headers_map.get("Authorization").or_else(|| raw_headers_map.get("authorization")) {
+            if let Some(auth) = raw_headers_map
+                .get("Authorization")
+                .or_else(|| raw_headers_map.get("authorization"))
+            {
                 let preview = if auth.len() > 30 { &auth[..30] } else { auth };
                 tracing::warn!(
                     auth_preview = %preview,
@@ -375,8 +378,7 @@ impl near::agent::channel_host::Host for ChannelStoreData {
                 );
             }
 
-            let raw_header_vec: Vec<(String, String)> =
-                raw_headers_map.into_iter().collect();
+            let raw_header_vec: Vec<(String, String)> = raw_headers_map.into_iter().collect();
             leak_detector
                 .scan_http_request(raw_url_for_scan, &raw_header_vec, body.as_deref())
                 .map_err(|e| format!("Potential secret leak blocked: {}", e))?;

@@ -300,7 +300,14 @@ impl ContainerJobManager {
         // Run the actual container creation. On any failure, revoke the token
         // and remove the handle so we don't leak resources.
         match self
-            .create_job_inner(job_id, &token, project_dir, mode, effective_mcp, max_iterations)
+            .create_job_inner(
+                job_id,
+                &token,
+                project_dir,
+                mode,
+                effective_mcp,
+                max_iterations,
+            )
             .await
         {
             Ok(()) => Ok(token),
@@ -339,9 +346,13 @@ impl ContainerJobManager {
             format!("IRONCLAW_ORCHESTRATOR_URL={}", orchestrator_url),
         ];
 
-        // Per-job max iterations override
-        if let Some(iters) = max_iterations {
-            env_vec.push(format!("IRONCLAW_MAX_ITERATIONS={}", iters));
+        // Per-job max iterations override (Worker mode only — ClaudeCode uses max_turns).
+        // Server-side clamp ensures the cap is enforced even if tool parsing is bypassed.
+        if let Some(iters) = max_iterations
+            && mode == JobMode::Worker
+        {
+            let capped = iters.clamp(1, 500);
+            env_vec.push(format!("IRONCLAW_MAX_ITERATIONS={}", capped));
         }
 
         // Build volume mounts (validate project_dir stays within ~/.ironclaw/projects/)
@@ -391,10 +402,7 @@ impl ContainerJobManager {
         // so workers can run pre-built scripts (e.g. run-reddit-outreach.sh)
         let scripts_dir = std::path::Path::new("/opt/ironclaw/scripts");
         if scripts_dir.exists() {
-            binds.push(format!(
-                "{}:/opt/scripts:ro",
-                scripts_dir.display()
-            ));
+            binds.push(format!("{}:/opt/scripts:ro", scripts_dir.display()));
         }
 
         // Claude Code mode: auth + tool allowlist.
@@ -646,12 +654,13 @@ impl ContainerJobManager {
     /// Remove a completed job handle from memory (called after result is read).
     pub async fn cleanup_job(&self, job_id: Uuid) {
         // Clean up per-job MCP config temp file if one was written
-        let tmp_path = std::path::Path::new("/tmp/ironclaw-mcp-configs")
-            .join(format!("{}.json", job_id));
-        if tmp_path.exists() && let Err(e) = std::fs::remove_file(&tmp_path) {
+        let tmp_path =
+            std::path::Path::new("/tmp/ironclaw-mcp-configs").join(format!("{}.json", job_id));
+        if tmp_path.exists()
+            && let Err(e) = std::fs::remove_file(&tmp_path)
+        {
             tracing::warn!(job_id = %job_id, error = %e, "Failed to remove per-job MCP config temp file");
         }
-
 
         self.containers.write().await.remove(&job_id);
         self.model_preferences.write().await.remove(&job_id);
@@ -728,6 +737,19 @@ fn generate_worker_mcp_config(
 
         // Filter to specific servers
         Some(names) => {
+            for name in names {
+                if name.len() > 128
+                    || name.contains('/')
+                    || name.contains('\\')
+                    || name.contains('\0')
+                {
+                    return Err(OrchestratorError::ContainerCreationFailed {
+                        job_id,
+                        reason: format!("invalid MCP server name: {:?}", name),
+                    });
+                }
+            }
+
             let content = std::fs::read_to_string(master_path).map_err(|e| {
                 OrchestratorError::ContainerCreationFailed {
                     job_id,
@@ -735,13 +757,12 @@ fn generate_worker_mcp_config(
                 }
             })?;
 
-            let master: serde_json::Value =
-                serde_json::from_str(&content).map_err(|e| {
-                    OrchestratorError::ContainerCreationFailed {
-                        job_id,
-                        reason: format!("failed to parse master MCP config: {}", e),
-                    }
-                })?;
+            let master: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+                OrchestratorError::ContainerCreationFailed {
+                    job_id,
+                    reason: format!("failed to parse master MCP config: {}", e),
+                }
+            })?;
 
             let servers = master["servers"]
                 .as_array()
@@ -767,7 +788,9 @@ fn generate_worker_mcp_config(
                 return Ok(None);
             }
 
-            let schema_version = master.get("schema_version").cloned()
+            let schema_version = master
+                .get("schema_version")
+                .cloned()
                 .unwrap_or(serde_json::json!(0));
             let filtered = serde_json::json!({
                 "servers": servers,
@@ -783,11 +806,12 @@ fn generate_worker_mcp_config(
             })?;
 
             let tmp_path = tmp_dir.join(format!("{}.json", job_id));
-            std::fs::write(&tmp_path, serde_json::to_string_pretty(&filtered).unwrap())
-                .map_err(|e| OrchestratorError::ContainerCreationFailed {
+            std::fs::write(&tmp_path, serde_json::to_string_pretty(&filtered).unwrap()).map_err(
+                |e| OrchestratorError::ContainerCreationFailed {
                     job_id,
                     reason: format!("failed to write per-job MCP config: {}", e),
-                })?;
+                },
+            )?;
 
             Ok(Some(tmp_path))
         }

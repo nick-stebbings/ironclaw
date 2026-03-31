@@ -559,8 +559,7 @@ pub async fn start_server(
         ));
 
     // Public file serving for screenshots/creatives (no auth — ephemeral preview images).
-    let screenshots = Router::new()
-        .route("/screenshots/{*path}", get(serve_screenshot_file));
+    let screenshots = Router::new().route("/screenshots/{*path}", get(serve_screenshot_file));
 
     // CORS: restrict to same-origin by default. Only localhost/127.0.0.1
     // origins are allowed, since the gateway is a local-first service.
@@ -2464,10 +2463,7 @@ async fn serve_screenshot_file(Path(path): Path<String>) -> axum::response::Resp
             (
                 [
                     (header::CONTENT_TYPE, mime),
-                    (
-                        header::CACHE_CONTROL,
-                        "public, max-age=3600".to_string(),
-                    ),
+                    (header::CACHE_CONTROL, "public, max-age=3600".to_string()),
                 ],
                 contents,
             )

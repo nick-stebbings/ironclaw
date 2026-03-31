@@ -160,11 +160,8 @@ impl McpClient {
     /// session manager to store them in.
     pub fn with_session_manager(mut self, session_manager: Arc<McpSessionManager>) -> Self {
         // Rebuild the HTTP transport with the session manager attached.
-        let transport = HttpMcpTransport::new(
-            self.server_url.clone(),
-            self.server_name.clone(),
-        )
-        .with_session_manager(session_manager.clone());
+        let transport = HttpMcpTransport::new(self.server_url.clone(), self.server_name.clone())
+            .with_session_manager(session_manager.clone());
         self.transport = Arc::new(transport);
         self.session_manager = Some(session_manager);
         self

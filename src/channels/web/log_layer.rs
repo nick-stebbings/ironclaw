@@ -28,6 +28,42 @@ use tracing_subscriber::{EnvFilter, Layer, reload};
 
 use crate::safety::LeakDetector;
 
+// =============================================================================
+// OpenTelemetry (optional — only active when OTEL_EXPORTER_OTLP_ENDPOINT is set)
+// =============================================================================
+
+/// Initialize an OpenTelemetry TracerProvider.
+/// Returns `Some(provider)` if OTEL_EXPORTER_OTLP_ENDPOINT is set, `None` otherwise.
+fn init_otel_provider() -> Option<opentelemetry_sdk::trace::TracerProvider> {
+    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok()?;
+    let service_name = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "ironclaw".to_string());
+
+    eprintln!("Initializing OpenTelemetry exporter → {endpoint}");
+
+    use opentelemetry_otlp::WithExportConfig;
+
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_export_config(opentelemetry_otlp::ExportConfig {
+            endpoint: endpoint.into(),
+            ..Default::default()
+        })
+        .build()
+        .map_err(|e| eprintln!("Failed to create OTEL exporter: {e}"))
+        .ok()?;
+
+    let resource = opentelemetry_sdk::Resource::new(vec![
+        opentelemetry::KeyValue::new("service.name", service_name),
+    ]);
+
+    let provider = opentelemetry_sdk::trace::TracerProvider::builder()
+        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+        .with_resource(resource)
+        .build();
+
+    Some(provider)
+}
+
 /// Maximum number of recent log entries kept for late-joining SSE subscribers.
 const HISTORY_CAP: usize = 500;
 
@@ -194,14 +230,34 @@ pub fn init_tracing(log_broadcaster: Arc<LogBroadcaster>) -> Arc<LogLevelHandle>
     }
     let base_filter = base_parts.join(",");
 
+    // Optional OTEL tracing — only active when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    // The reload_layer must be created per-branch because its type param depends on the subscriber type.
+    if let Some(provider) = init_otel_provider() {
+        use opentelemetry::trace::TracerProvider as _;
+        let tracer = provider.tracer("ironclaw");
+        opentelemetry::global::set_tracer_provider(provider);
+        let otel = tracing_opentelemetry::layer().with_tracer(tracer);
+
+        let env_filter = EnvFilter::new(&raw_filter);
+        let (reload_layer, reload_handle) = reload::Layer::new(env_filter);
+        let handle = Arc::new(LogLevelHandle::new(reload_handle, ironclaw_level, base_filter));
+
+        tracing_subscriber::registry()
+            .with(reload_layer)
+            .with(otel)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(false)
+                    .with_writer(crate::tracing_fmt::TruncatingStderr::default()),
+            )
+            .with(WebLogLayer::new(log_broadcaster))
+            .init();
+        return handle;
+    }
+
     let env_filter = EnvFilter::new(&raw_filter);
     let (reload_layer, reload_handle) = reload::Layer::new(env_filter);
-
-    let handle = Arc::new(LogLevelHandle::new(
-        reload_handle,
-        ironclaw_level,
-        base_filter,
-    ));
+    let handle = Arc::new(LogLevelHandle::new(reload_handle, ironclaw_level, base_filter));
 
     tracing_subscriber::registry()
         .with(reload_layer)

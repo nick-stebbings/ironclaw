@@ -1,0 +1,59 @@
+{
+    "version": "0.2.0",
+    "wit_version": "0.3.0",
+    "http": {
+        "allowlist": [
+            {
+                "host": "mail.zoho.com.au",
+                "path_prefix": "/api/",
+                "methods": ["GET", "POST", "PUT", "DELETE"]
+            }
+        ],
+        "credentials": {
+            "zoho_oauth_token": {
+                "secret_name": "zoho_oauth_token",
+                "location": {
+                    "type": "header",
+                    "name": "Authorization",
+                    "prefix": "Zoho-oauthtoken "
+                },
+                "host_patterns": [
+                    "mail.zoho.com.au"
+                ]
+            }
+        },
+        "rate_limit": {
+            "requests_per_minute": 60,
+            "requests_per_hour": 500
+        },
+        "timeout_secs": 30
+    },
+    "secrets": {
+        "allowed_names": [
+            "zoho_oauth_token"
+        ]
+    },
+    "auth": {
+        "secret_name": "zoho_oauth_token",
+        "display_name": "Zoho Mail",
+        "oauth": {
+            "authorization_url": "https://accounts.zoho.com.au/oauth/v2/auth",
+            "token_url": "https://accounts.zoho.com.au/oauth/v2/token",
+            "client_id_env": "ZOHO_OAUTH_CLIENT_ID",
+            "client_secret_env": "ZOHO_OAUTH_CLIENT_SECRET",
+            "scopes": [
+                "ZohoMail.messages.ALL",
+                "ZohoMail.accounts.ALL",
+                "ZohoMail.folders.ALL",
+                "ZohoMail.tags.ALL",
+                "ZohoMail.search.READ"
+            ],
+            "use_pkce": false,
+            "extra_params": {
+                "access_type": "offline",
+                "prompt": "consent"
+            }
+        },
+        "env_var": "ZOHO_OAUTH_TOKEN"
+    }
+}

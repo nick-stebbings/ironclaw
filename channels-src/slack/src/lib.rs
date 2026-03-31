@@ -326,8 +326,89 @@ impl Guest for SlackChannel {
 
     fn on_status(_update: StatusUpdate) {}
 
-    fn on_broadcast(_user_id: String, _response: AgentResponse) -> Result<(), String> {
-        Err("broadcast not yet implemented for Slack channel".to_string())
+    fn on_broadcast(user_id: String, response: AgentResponse) -> Result<(), String> {
+        // Open a DM channel with the user via conversations.open
+        let open_payload = serde_json::json!({ "users": user_id });
+        let open_bytes = serde_json::to_vec(&open_payload)
+            .map_err(|e| format!("Failed to serialize conversations.open payload: {}", e))?;
+
+        let headers = serde_json::json!({
+            "Content-Type": "application/json",
+            "Authorization": "Bearer {SLACK_BOT_TOKEN}"
+        });
+
+        let open_result = channel_host::http_request(
+            "POST",
+            "https://slack.com/api/conversations.open",
+            &headers.to_string(),
+            Some(&open_bytes),
+            None,
+        )
+        .map_err(|e| format!("conversations.open failed: {}", e))?;
+
+        if open_result.status != 200 {
+            return Err(format!(
+                "conversations.open returned status {}",
+                open_result.status
+            ));
+        }
+
+        let open_resp: serde_json::Value = serde_json::from_slice(&open_result.body)
+            .map_err(|e| format!("Failed to parse conversations.open response: {}", e))?;
+
+        if !open_resp["ok"].as_bool().unwrap_or(false) {
+            return Err(format!(
+                "conversations.open error: {}",
+                open_resp["error"].as_str().unwrap_or("unknown")
+            ));
+        }
+
+        let channel_id = open_resp["channel"]["id"]
+            .as_str()
+            .ok_or("conversations.open response missing channel.id")?;
+
+        // Post message to the DM channel
+        let mut payload = serde_json::json!({
+            "channel": channel_id,
+            "text": response.content,
+        });
+
+        if let Some(thread_id) = response.thread_id {
+            payload["thread_ts"] = serde_json::Value::String(thread_id);
+        }
+
+        let payload_bytes = serde_json::to_vec(&payload)
+            .map_err(|e| format!("Failed to serialize payload: {}", e))?;
+
+        let result = channel_host::http_request(
+            "POST",
+            "https://slack.com/api/chat.postMessage",
+            &headers.to_string(),
+            Some(&payload_bytes),
+            None,
+        )
+        .map_err(|e| format!("chat.postMessage failed: {}", e))?;
+
+        if result.status != 200 {
+            return Err(format!("Slack API returned status {}", result.status));
+        }
+
+        let slack_resp: serde_json::Value = serde_json::from_slice(&result.body)
+            .map_err(|e| format!("Failed to parse Slack response: {}", e))?;
+
+        if !slack_resp["ok"].as_bool().unwrap_or(false) {
+            return Err(format!(
+                "Slack API error: {}",
+                slack_resp["error"].as_str().unwrap_or("unknown")
+            ));
+        }
+
+        channel_host::log(
+            channel_host::LogLevel::Info,
+            &format!("Broadcast to Slack DM for user {}", user_id),
+        );
+
+        Ok(())
     }
 
     fn on_shutdown() {

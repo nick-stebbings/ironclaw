@@ -73,6 +73,18 @@ pub fn model_cost(model_id: &str) -> Option<(Decimal, Decimal)> {
         | "claude-3-5-haiku-latest" => Some((dec!(0.0000008), dec!(0.000004))),
         "claude-3-haiku-20240307" => Some((dec!(0.00000025), dec!(0.00000125))),
 
+        // Moonshot / Kimi
+        // Kimi K2.5: $0.14/M input, $0.59/M output (OpenRouter pricing Mar 2026)
+        "kimi-k2.5" | "kimi-k2" | "kimi-k1.5" => Some((dec!(0.00000014), dec!(0.00000059))),
+
+        // DeepSeek
+        "deepseek-chat" | "deepseek-v3" => Some((dec!(0.00000027), dec!(0.0000011))),
+        "deepseek-r1" => Some((dec!(0.00000055), dec!(0.00000219))),
+
+        // Google Gemini
+        "gemini-2.0-flash" | "gemini-2.0-flash-001" => Some((dec!(0.0000001), dec!(0.0000004))),
+        "gemini-2.5-pro" | "gemini-2.5-pro-preview" => Some((dec!(0.00000125), dec!(0.00001))),
+
         // Ollama / local models -- free
         _ if is_local_model(id) => Some((Decimal::ZERO, Decimal::ZERO)),
 

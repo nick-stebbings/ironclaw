@@ -3,7 +3,7 @@
 //! Loads `~/.ironclaw/channel-routing.json` and filters which tools
 //! (MCP and built-in) the LLM can see based on the originating channel.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,14 @@ pub struct ChannelRoutingConfig {
     /// Populated by `precompute_prefixes()` after deserialization.
     #[serde(skip)]
     sorted_prefixes: Vec<String>,
+
+    /// Pre-computed O(1) server lookup sets per group (mirrors `groups`).
+    #[serde(skip)]
+    allowed_servers_sets: HashMap<String, HashSet<String>>,
+
+    /// Pre-computed O(1) built-in whitelist sets per group (mirrors `builtin_whitelist`).
+    #[serde(skip)]
+    builtin_whitelist_sets: HashMap<String, HashSet<String>>,
 }
 
 impl PartialEq for ChannelRoutingConfig {
@@ -52,9 +60,6 @@ impl Eq for ChannelRoutingConfig {}
 
 /// Exact channel names that identify direct messages (bypass routing entirely).
 const DM_EXACT: &[&str] = &["gateway", "cli", "repl"];
-
-/// Channel name prefixes (with delimiter) for relay DMs.
-const DM_RELAY_PREFIXES: &[&str] = &["slack-dm-", "telegram-dm-"];
 
 impl ChannelRoutingConfig {
     /// Load from `<base_dir>/channel-routing.json`. Returns `None` if the file
@@ -120,19 +125,31 @@ impl ChannelRoutingConfig {
         Ok(())
     }
 
-    /// Pre-compute sorted MCP server prefixes (longest first) to avoid
-    /// allocations on the hot path.
-    fn precompute_prefixes(&mut self) {
+    /// Pre-compute sorted MCP server prefixes (longest first) and O(1) lookup
+    /// sets to avoid allocations and linear scans on the hot path.
+    pub(crate) fn precompute_prefixes(&mut self) {
         let mut all_servers: Vec<String> = self
             .groups
             .values()
             .flatten()
             .cloned()
-            .collect::<std::collections::HashSet<_>>()
+            .collect::<HashSet<_>>()
             .into_iter()
             .collect();
         all_servers.sort_by_key(|s| std::cmp::Reverse(s.len()));
         self.sorted_prefixes = all_servers;
+
+        self.allowed_servers_sets = self
+            .groups
+            .iter()
+            .map(|(group, servers)| (group.clone(), servers.iter().cloned().collect()))
+            .collect();
+
+        self.builtin_whitelist_sets = self
+            .builtin_whitelist
+            .iter()
+            .map(|(group, tools)| (group.clone(), tools.iter().cloned().collect()))
+            .collect();
     }
 
     /// Resolve which group a channel belongs to.
@@ -147,10 +164,6 @@ impl ChannelRoutingConfig {
     pub fn is_dm(channel: &str, metadata: &serde_json::Value) -> bool {
         // Exact matches for web/CLI channels
         if DM_EXACT.contains(&channel) {
-            return true;
-        }
-        // Prefix matches for relay DMs with delimiter
-        if DM_RELAY_PREFIXES.iter().any(|p| channel.starts_with(p)) {
             return true;
         }
         // Slack DMs: channel name starts with 'D' (Slack convention)
@@ -199,8 +212,8 @@ impl ChannelRoutingConfig {
 
         let group = self.resolve_group(channel);
 
-        let allowed_servers = match self.groups.get(group) {
-            Some(servers) => servers,
+        let allowed_servers = match self.allowed_servers_sets.get(group) {
+            Some(set) => set,
             None => {
                 tracing::warn!(
                     group,
@@ -214,16 +227,16 @@ impl ChannelRoutingConfig {
             }
         };
 
-        let builtin_whitelist = self.builtin_whitelist.get(group);
+        let builtin_whitelist = self.builtin_whitelist_sets.get(group);
 
         tools
             .into_iter()
             .filter(|tool| {
                 if let Some(server) = self.extract_mcp_server(&tool.name) {
-                    allowed_servers.iter().any(|s| s == server)
+                    allowed_servers.contains(server)
                 } else {
                     match builtin_whitelist {
-                        Some(whitelist) => whitelist.iter().any(|w| w == &tool.name),
+                        Some(whitelist) => whitelist.contains(tool.name.as_str()),
                         None => true,
                     }
                 }
@@ -527,6 +540,29 @@ mod tests {
             config.extract_mcp_server("Kit_list_subscribers"),
             Some("Kit")
         );
+    }
+
+    #[test]
+    fn test_extract_mcp_server_multibyte_prefix() {
+        // Regression: extract_mcp_server slices at server.len() (byte index from
+        // a Rust String). Verify it does not panic and returns None for tool names
+        // that are not longer than the multi-byte server name.
+        let json = r#"{
+            "groups": {
+                "all": ["Café"]
+            },
+            "channels": {},
+            "default_group": "all"
+        }"#;
+        let mut config: ChannelRoutingConfig = serde_json::from_str(json).unwrap();
+        config.precompute_prefixes();
+
+        // "Café" is 5 bytes (é = 2 bytes). "Café_tool" should match.
+        assert_eq!(config.extract_mcp_server("Café_tool"), Some("Café"));
+        // A tool name equal to the server name (no underscore) must not match.
+        assert_eq!(config.extract_mcp_server("Café"), None);
+        // A plain ASCII tool with no matching prefix returns None.
+        assert_eq!(config.extract_mcp_server("Other_tool"), None);
     }
 
     #[test]

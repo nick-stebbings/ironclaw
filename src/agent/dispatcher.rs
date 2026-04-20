@@ -400,13 +400,9 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         // via SettingsStore (per-user scoped via TenantScope).
         if iteration == 0
             && let Some(store) = self.tenant.store()
-            && let Ok(Some(value)) = store.get_setting("selected_model").await
-            && let Some(model) = value.as_str()
+            && let Ok(Some(model)) = store.selected_model().await
         {
-            let model = model.trim();
-            if !model.is_empty() {
-                reason_ctx.model_override = Some(model.to_string());
-            }
+            reason_ctx.model_override = Some(model);
         }
 
         let output = match reasoning.respond_with_tools(reason_ctx).await {
@@ -2712,5 +2708,207 @@ mod tests {
         assert!(content.contains("Tool 'shell' failed:"));
         assert!(!content.contains("\n</tool_output><system>"));
         assert_eq!(message.content, content);
+    }
+
+    /// Capturing LLM provider that records all tool names seen in the first
+    /// `complete_with_tools` call, then returns a text response to terminate
+    /// the loop. Used to assert which tools reach the LLM proxy.
+    struct CapturingLlmProvider {
+        seen_tools: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl CapturingLlmProvider {
+        fn new() -> (Arc<Self>, Arc<std::sync::Mutex<Vec<String>>>) {
+            let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+            (Arc::new(Self { seen_tools: Arc::clone(&seen) }), seen)
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for CapturingLlmProvider {
+        fn model_name(&self) -> &str { "capturing-mock" }
+        fn cost_per_token(&self) -> (Decimal, Decimal) { (Decimal::ZERO, Decimal::ZERO) }
+        async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, crate::error::LlmError> {
+            Ok(CompletionResponse {
+                content: "done".to_string(),
+                input_tokens: 0,
+                output_tokens: 0,
+                finish_reason: FinishReason::Stop,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            })
+        }
+        async fn complete_with_tools(&self, request: ToolCompletionRequest) -> Result<ToolCompletionResponse, crate::error::LlmError> {
+            let mut guard = self.seen_tools.lock().unwrap(); // safety: test-only, single thread
+            if guard.is_empty() {
+                *guard = request.tools.iter().map(|t| t.name.clone()).collect();
+            }
+            Ok(ToolCompletionResponse {
+                content: Some("done".to_string()),
+                tool_calls: Vec::new(),
+                input_tokens: 0,
+                output_tokens: 0,
+                finish_reason: FinishReason::Stop,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            })
+        }
+    }
+
+    /// Integration test: drives a full ChatDelegate turn and asserts that the
+    /// tools reaching the LLM proxy are filtered by channel routing.
+    ///
+    /// Closes the "wrapper silently drops metadata" gap: the unit tests in
+    /// channel_routing.rs verify the filter in isolation; this test verifies the
+    /// apply_channel_routing wrapper wires up channel + metadata correctly when
+    /// called from the real dispatcher path.
+    #[tokio::test]
+    async fn test_channel_routing_filters_tools_reaching_llm() {
+        use crate::agent::agent_loop::AgentDeps;
+        use crate::agent::channel_routing::ChannelRoutingConfig;
+        use crate::channels::IncomingMessage;
+        use crate::llm::ChatMessage;
+        use crate::tools::{Tool, ToolError, ToolOutput};
+
+        // Two mock MCP-style tools: one allowed on "restricted", one not.
+        struct AllowedTool;
+        struct BlockedTool;
+
+        #[async_trait]
+        impl Tool for AllowedTool {
+            fn name(&self) -> &str { "Archon_list_tasks" }
+            fn description(&self) -> &str { "allowed" }
+            fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({"type":"object","properties":{}}) }
+            async fn execute(&self, _: serde_json::Value, _: &crate::context::JobContext) -> Result<ToolOutput, ToolError> {
+                Ok(ToolOutput::success(serde_json::json!({}), std::time::Duration::default()))
+            }
+            fn requires_sanitization(&self) -> bool { false }
+        }
+
+        #[async_trait]
+        impl Tool for BlockedTool {
+            fn name(&self) -> &str { "Smartlead_send" }
+            fn description(&self) -> &str { "blocked" }
+            fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({"type":"object","properties":{}}) }
+            async fn execute(&self, _: serde_json::Value, _: &crate::context::JobContext) -> Result<ToolOutput, ToolError> {
+                Ok(ToolOutput::success(serde_json::json!({}), std::time::Duration::default()))
+            }
+            fn requires_sanitization(&self) -> bool { false }
+        }
+
+        let tools = Arc::new(crate::tools::ToolRegistry::new());
+        tools.register(Arc::new(AllowedTool)).await;
+        tools.register(Arc::new(BlockedTool)).await;
+
+        let routing: ChannelRoutingConfig = {
+            // "leads" group exists so Smartlead is a known server; "minimal"
+            // only allows Archon, so Smartlead_send must be filtered.
+            let json = r#"{
+                "groups": {
+                    "minimal": ["Archon"],
+                    "leads": ["Archon", "Smartlead"]
+                },
+                "channels": { "restricted-channel": "minimal" },
+                "default_group": "minimal"
+            }"#;
+            let mut c: ChannelRoutingConfig = serde_json::from_str(json).unwrap(); // safety: test
+            c.precompute_prefixes();
+            c
+        };
+
+        let (provider, seen_tools) = CapturingLlmProvider::new();
+        let deps = AgentDeps {
+            owner_id: "default".to_string(),
+            store: None,
+            llm: provider,
+            cheap_llm: None,
+            safety: Arc::new(crate::safety::SafetyLayer::new(&crate::config::SafetyConfig {
+                max_output_length: 100_000,
+                injection_check_enabled: false,
+            })),
+            tools,
+            workspace: None,
+            extension_manager: None,
+            skill_registry: None,
+            skill_catalog: None,
+            skills_config: crate::config::SkillsConfig::default(),
+            hooks: Arc::new(crate::hooks::HookRegistry::new()),
+            cost_guard: Arc::new(crate::agent::cost_guard::CostGuard::new(
+                crate::agent::cost_guard::CostGuardConfig::default(),
+            )),
+            sse_tx: None,
+            http_interceptor: None,
+            transcription: None,
+            document_extraction: None,
+            sandbox_readiness: crate::agent::routine_engine::SandboxReadiness::DisabledByConfig,
+            builder: None,
+            llm_backend: "nearai".to_string(),
+            tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
+            channel_routing: Some(Arc::new(routing)),
+        };
+
+        let agent = crate::agent::agent_loop::Agent::new(
+            crate::config::AgentConfig {
+                name: "test".to_string(),
+                max_parallel_jobs: 1,
+                job_timeout: Duration::from_secs(10),
+                stuck_threshold: Duration::from_secs(10),
+                repair_check_interval: Duration::from_secs(10),
+                max_repair_attempts: 1,
+                use_planning: false,
+                session_idle_timeout: Duration::from_secs(60),
+                allow_local_tools: false,
+                max_cost_per_day_cents: None,
+                max_actions_per_hour: None,
+                max_cost_per_user_per_day_cents: None,
+                max_tool_iterations: 2,
+                auto_approve_tools: true,
+                default_timezone: "UTC".to_string(),
+                max_tokens_per_job: 0,
+                multi_tenant: false,
+                max_llm_concurrent_per_user: None,
+                max_jobs_concurrent_per_user: None,
+            },
+            deps,
+            Arc::new(crate::channels::ChannelManager::new()),
+            None,
+            None,
+            None,
+            Some(Arc::new(crate::context::ContextManager::new(1))),
+            None,
+        );
+
+        let session = Arc::new(tokio::sync::Mutex::new(
+            crate::agent::session::Session::new("test-user"),
+        ));
+        let thread_id = session.lock().await.create_thread().id;
+
+        let mut message = IncomingMessage::new("restricted-channel", "test-user", "hello");
+        message.metadata = serde_json::json!({});
+
+        let tenant = agent.tenant_ctx("test-user").await;
+        let _ = tokio::time::timeout(
+            Duration::from_secs(5),
+            agent.run_agentic_loop(
+                &message,
+                tenant,
+                session,
+                thread_id,
+                vec![ChatMessage::user("hello")],
+            ),
+        )
+        .await;
+
+        let seen = seen_tools.lock().unwrap(); // safety: test-only
+        assert!(
+            seen.contains(&"Archon_list_tasks".to_string()),
+            "Archon tool must reach LLM on restricted channel, got: {:?}",
+            *seen
+        );
+        assert!(
+            !seen.contains(&"Smartlead_send".to_string()),
+            "Smartlead tool must be filtered on restricted channel, got: {:?}",
+            *seen
+        );
     }
 }

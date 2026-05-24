@@ -24,6 +24,11 @@ ignore = [
     # (via ironclaw_tui). We don't call `IterMut` from the ratatui code path.
     # Remove when ratatui releases a version using lru >= 0.16.3.
     "RUSTSEC-2026-0002",
+    # wasmtime-wasi 43: path_open(TRUNCATE) bypasses FilePerms::WRITE — fix in ≥44.0.2.
+    # Our WasiCtxBuilder::new().build() grants no filesystem pre-opens, so path_open
+    # cannot reach any real files; the vulnerability is not exploitable in this configuration.
+    # Track upgrade to wasmtime 44 separately (breaking API changes require a dedicated PR).
+    "RUSTSEC-2026-0149",
 ]
 
 [licenses]

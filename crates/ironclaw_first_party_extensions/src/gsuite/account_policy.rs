@@ -10,10 +10,24 @@ pub fn gsuite_google_account_visible_to_requester(
     if account_explicitly_bound_to_requester(account, requester_extension) {
         return true;
     }
-    if !is_gsuite_extension_id(requester_extension) {
+    if !is_gsuite_extension_id(requester_extension)
+        && !is_env_allowed_google_requester(requester_extension)
+    {
         return false;
     }
     google_account_available_to_gsuite_family(account)
+}
+
+/// Admin-registered extensions (e.g. a google REST shim consuming broker-pushed
+/// ManualToken accounts) may be allowlisted for provider=google account
+/// visibility via env: IRONCLAW_REBORN_GOOGLE_ACCOUNT_EXTRA_REQUESTERS is a
+/// comma-separated extension-id list. Default (unset) preserves upstream
+/// behavior: gsuite family only.
+fn is_env_allowed_google_requester(requester_extension: &ExtensionId) -> bool {
+    std::env::var("IRONCLAW_REBORN_GOOGLE_ACCOUNT_EXTRA_REQUESTERS").is_ok_and(|list| {
+        list.split(',')
+            .any(|entry| entry.trim() == requester_extension.as_str())
+    })
 }
 
 fn google_account_available_to_gsuite_family(account: &CredentialAccount) -> bool {

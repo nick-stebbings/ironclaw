@@ -18,4 +18,12 @@ echo "Building IronClaw..."
 cargo build --release
 
 echo ""
-echo "Done. Binary: target/release/ironclaw"
+echo "Building IronClaw Reborn (WebChat v2)..."
+# webui-v2-beta: enables 'ironclaw-reborn serve' (HTTP gateway)
+# postgres:      enables production PostgreSQL storage backend
+/home/deploy/.cargo/bin/cargo build --release -p ironclaw_reborn_cli     --features webui-v2-beta,postgres
+
+echo ""
+echo "Done."
+echo "  ironclaw binary:        target/release/ironclaw"
+echo "  ironclaw-reborn binary: target/release/ironclaw-reborn"

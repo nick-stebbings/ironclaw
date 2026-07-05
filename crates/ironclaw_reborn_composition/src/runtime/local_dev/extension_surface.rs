@@ -226,9 +226,18 @@ fn extension_network_policy(capability: &ActiveExtensionCapability) -> NetworkPo
     let has_egress_targets = !targets.is_empty();
     NetworkPolicy {
         allowed_targets: targets,
-        deny_private_ip_ranges: has_egress_targets,
+        deny_private_ip_ranges: has_egress_targets && !allow_private_extension_egress(),
         max_egress_bytes: is_web_access_exa_mcp.then_some(NETWORK_EGRESS_LIMIT),
     }
+}
+
+/// Local-dev opt-out for the private-IP egress denial, so admin-registered MCP
+/// shim extensions served over a tailnet (CGNAT 100.64/10) hostname are
+/// reachable. Default remains deny; set
+/// IRONCLAW_REBORN_EXTENSION_ALLOW_PRIVATE_EGRESS=1 in the instance env to
+/// allow. Scoped to the local-dev extension surface only.
+fn allow_private_extension_egress() -> bool {
+    std::env::var("IRONCLAW_REBORN_EXTENSION_ALLOW_PRIVATE_EGRESS").is_ok_and(|v| v == "1")
 }
 
 #[cfg(test)]

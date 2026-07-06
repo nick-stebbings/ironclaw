@@ -1375,6 +1375,34 @@ fn select_skill_activations(
 
     validate_selected_names_are_unambiguous(&activations)?;
 
+    // Observability: emit the activation outcome so "why did my message not run a
+    // skill" is answerable from logs (e.g. a dispatched prompt that arrived
+    // without a `$`/mention and fell through to plain chat). One line per turn.
+    if activations.is_empty() {
+        tracing::info!(
+            target: "ironclaw::skills::activation",
+            outcome = "no_skill_activated",
+            reason = "passthrough",
+            candidate_count = candidates.len(),
+            selection_mode = ?config.selection_mode,
+            "no skill activated for message; passing through as plain chat"
+        );
+    } else {
+        let activated: Vec<String> = activations
+            .iter()
+            .map(|a| format!("{}:{:?}", a.name, a.mode))
+            .collect();
+        tracing::info!(
+            target: "ironclaw::skills::activation",
+            outcome = "skill_activated",
+            activated = ?activated,
+            activated_count = activations.len(),
+            candidate_count = candidates.len(),
+            selection_mode = ?config.selection_mode,
+            "skill(s) activated for message"
+        );
+    }
+
     Ok(SkillActivationSelection {
         activations,
         rewritten_message,

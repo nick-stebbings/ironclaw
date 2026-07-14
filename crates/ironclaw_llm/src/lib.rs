@@ -449,6 +449,10 @@ fn create_openai_compat_from_registry(
         extra_headers,
     };
     let adapter = RigAdapter::new(model, &config.model)
+        // Anthropic prompt caching also works through OpenAI-compatible
+        // gateways (OpenRouter honors top-level `cache_control`); the adapter
+        // downgrades to None for models without prompt-cache support.
+        .with_cache_retention(config.cache_retention)
         .with_unsupported_params(config.unsupported_params.clone())
         .with_model_listing(models_endpoint);
     Ok(Arc::new(adapter))

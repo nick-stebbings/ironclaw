@@ -395,7 +395,14 @@ fn resolve_codex_cli_auth_provider() -> Result<ResolvedProviderConfig, LlmError>
 }
 
 fn apply_registry_provider_env(config: &mut RegistryProviderConfig) -> Result<(), LlmError> {
-    if config.protocol == ProviderProtocol::Anthropic {
+    // Prompt caching applies to the native Anthropic protocol AND Anthropic
+    // models served over OpenAI-compatible gateways (e.g. OpenRouter, which
+    // honors a top-level `cache_control`). The adapter downgrades to None for
+    // models without prompt-cache support, so this is safe for non-Claude.
+    if matches!(
+        config.protocol,
+        ProviderProtocol::Anthropic | ProviderProtocol::OpenAiCompletions
+    ) {
         config.cache_retention = nonempty_env("ANTHROPIC_CACHE_RETENTION")
             .map(|value| {
                 value
@@ -407,7 +414,9 @@ fn apply_registry_provider_env(config: &mut RegistryProviderConfig) -> Result<()
             })
             .transpose()?
             .unwrap_or_default();
+    }
 
+    if config.protocol == ProviderProtocol::Anthropic {
         if let Some(token) = nonempty_env("ANTHROPIC_OAUTH_TOKEN") {
             config.oauth_token = Some(SecretString::from(token));
             if config.api_key.is_none() {

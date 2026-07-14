@@ -420,6 +420,29 @@ where
                 Err(_elapsed) => Err(LoopModelGatewayError::timed_out()),
             };
 
+        // Per-call cost telemetry: the one seam every assistant model call
+        // passes through with both the run context and provider token usage
+        // in scope. A marker span exports even with no active parent span.
+        if let Ok(response) = &gateway_result {
+            if let Some(usage) = response.usage {
+                let route = self.context.resolved_model_route.as_ref();
+                let _cost = tracing::info_span!(
+                    target: "ironclaw::cost",
+                    "llm.cost",
+                    thread_id = %self.context.thread_id,
+                    turn_id = %self.context.turn_id,
+                    run_id = %self.context.run_id,
+                    loop_driver_id = self.context.loop_driver_id.as_str(),
+                    model_profile = response.effective_model_profile_id.as_str(),
+                    provider = route.map(|r| r.provider_id.as_str()).unwrap_or(""),
+                    model = route.map(|r| r.model_id.as_str()).unwrap_or(""),
+                    input_tokens = usage.input_tokens,
+                    output_tokens = usage.output_tokens,
+                )
+                .entered();
+            }
+        }
+
         // Post-call accounting fires on BOTH success and failure. The
         // RAII guard stays armed across this await — if the future is
         // cancelled mid-`post_model_call`, the Drop path calls

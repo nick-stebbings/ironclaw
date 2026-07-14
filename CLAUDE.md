@@ -70,6 +70,29 @@ regression-with-every-fix) in `.claude/rules/testing.md`; **Reborn
 integration tests** authoring guide in `tests/integration/CLAUDE.md`;
 Python/Playwright suite in `tests/e2e/CLAUDE.md`.
 
+### ⚠️ Production / deploy build — the `serve` gateway needs feature flags
+
+`ironclaw-reborn serve` (the WebChat v2 HTTP gateway) is **off by default**. A plain
+`cargo build --release` — or `-p ironclaw_reborn_cli --bin ironclaw-reborn` with no
+`--features` — produces a binary that dies at launch with
+`error: unrecognized subcommand 'serve'`, because `serve` is gated behind the
+`webui-v2-beta` feature and the singleton's Postgres backend behind `postgres`.
+
+**Always build/deploy the runtime binary with reborn AND webui:**
+
+```bash
+cargo build --release -p ironclaw_reborn_cli --features webui-v2-beta,postgres --bin ironclaw-reborn
+```
+
+(default `root-llm-provider` = LLM wiring · `webui-v2-beta` = `serve`/WebChat · `postgres`
+= singleton storage). This matches `/opt/ironclaw/MULTI_INSTANCE_SETUP.md`, and both
+`ironclaw.service` (singleton) and `ironclaw-reborn@pilot` exec this same binary.
+
+**Never `cp` over `target/release/ironclaw-reborn`** — it's a hardlink into cargo's build
+cache, so overwriting it corrupts the cached artifact while cargo's fingerprint still reads
+"up to date" (a `touch` won't dislodge it). To force a real rebuild after such a mishap:
+`cargo clean -p ironclaw_reborn_composition -p ironclaw_reborn_cli --release`.
+
 ## Code Style
 
 - Prefer `crate::` for cross-module imports; `super::` is fine in tests and intra-module refs

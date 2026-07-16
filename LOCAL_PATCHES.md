@@ -16,6 +16,7 @@ cd /opt/ironclaw/src
 git checkout local-patches
 bash scripts/sync-upstream.sh     # fetch + backup + rebase onto origin/main
 # then: build-all.sh -> canary drew-claw -> restart pilot
+# ALWAYS after a rebase: run the range-diff + env-gated-patch verification below.
 ```
 
 Rebase on a regular cadence (monthly, or before adopting an upstream feature)
@@ -32,6 +33,45 @@ upstream has since implemented (`git rebase -i origin/main`).
   `node:sqlite`). A deploy-local Node 24 at `/home/deploy/opt/node-v24.18.0-linux-x64`
   is used just for the build — prepend its `bin/` to `PATH`; system Node stays untouched.
   Node is **build-time only** — the runtime serves the compiled-in assets.
+
+## Env-gated patches — verify ACTIVE after every rebase / rebuild / instance-cleanup
+
+**A rebase preserves patch _code_; it does not preserve the per-instance _config_
+that makes several patches actually do anything.** Half of this series is inert
+unless an env var is (a) set in `/etc/ironclaw/instances/<id>.env` **and** (b)
+passed through the launcher's `env -i` allowlist
+(`/usr/local/bin/ironclaw-reborn-instance-launcher`) **and** (c) the binary is
+rebuilt from the post-rebase source. An instance-env wipe / regeneration can
+silently disable a patch whose source is perfectly intact — the symptom then
+looks exactly like "the rebase clobbered the source" when it did not.
+
+Run `git range-diff <old-base>..<pre-rebase-backup> origin/main..local-patches`
+after every rebase: `=` means a patch survived byte-identical, `!` means its
+content drifted and needs a read. Then verify each env-gated patch is *active*:
+
+| Patch | Env var (instance `.env` + launcher allowlist) | Smoke check it's ACTIVE |
+|-------|------------------------------------------------|--------------------------|
+| #1 feature flags | _(build-time)_ `--features webui-v2-beta,postgres` | `ironclaw-reborn serve --help` exists; instance boots WebChat |
+| #2 private-IP egress | `IRONCLAW_REBORN_EXTENSION_ALLOW_PRIVATE_EGRESS=1` | any tailnet shim (notion/google/vane on 100.x) is reachable, not `error_kind="network"` |
+| #3 non-gsuite google requesters | `IRONCLAW_REBORN_GOOGLE_ACCOUNT_EXTRA_REQUESTERS=google-rest` | `google-rest` Sheets/Drive call resolves a token — NOT `x-google-token header missing` |
+| #6 cost telemetry / #11 OTel | `OTEL_EXPORTER_OTLP_ENDPOINT`, `:9559` exporter | spans arrive at the collector |
+
+Repo source of truth for the instance env is `ops-library
+scripts/ironclaw/create-instance.sh` — a fresh instance gets all of these; a
+**pre-existing** instance whose `.env` predates a patch (or was wiped) will be
+missing it and must be reconciled by hand.
+
+> **2026-07-16 incident.** After this rebase + a pilot account-wipe, `google-rest`
+> Sheets/Drive failed with `x-google-token header missing`. Root cause was **not**
+> the rebase: patch #3 survived byte-identical (`range-diff` `=`), the binary was
+> rebuilt (04:20), and the launcher passed the var. The pilot's `.env` had simply
+> **lost `IRONCLAW_REBORN_GOOGLE_ACCOUNT_EXTRA_REQUESTERS`**, so the gsuite
+> account-visibility policy hid the broker-pushed `provider=google` account from
+> `google-rest` → no token staged. The Agentiff broker was refreshing + pushing
+> correctly the whole time (Loki: `Successfully refreshed OAuth token` +
+> `Pushed credential` every 30 min). A stale persistent grant had been masking the
+> missing env until the restart cleared it. Fix: add the var back to the instance
+> `.env`, restart.
 
 ## The series (top of `local-patches`, oldest first)
 

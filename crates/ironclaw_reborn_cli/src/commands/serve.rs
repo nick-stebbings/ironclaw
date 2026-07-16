@@ -97,7 +97,26 @@ pub(crate) struct ServeCommand {
 
 impl ServeCommand {
     pub(crate) fn execute(self, context: RebornCliContext) -> anyhow::Result<()> {
-        crate::runtime::init_tracing();
+        // Build the Tokio runtime up-front (before tracing init) so the OTLP
+        // batch span processor in init_tracing() — active only when
+        // OTEL_EXPORTER_OTLP_ENDPOINT is set — can tokio::spawn its background
+        // export task during init.
+        //
+        // The agent loop executes a deep async dispatch chain (turn runner ->
+        // planned driver -> canonical executor -> capability stage -> host
+        // dispatch -> first-party tool); a single poll of one capability
+        // dispatch consumes ~1.9 MB of stack in debug builds, which overflows
+        // the default 2 MB worker thread. Match the 8 MB stack the codebase
+        // already uses for deep work.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(8 * 1024 * 1024)
+            .build()
+            .context("failed to build tokio runtime for `serve`")?;
+        {
+            let _rt_guard = rt.enter();
+            crate::runtime::init_tracing();
+        }
 
         // Build the runtime config from the operator's TOML. Built first so
         // the local-dev-yolo host-access disclosure gate fires before any
@@ -393,19 +412,6 @@ impl ServeCommand {
         }
         seed_default_config_file_if_missing(&context.boot_config().home().config_file_path())
             .map_err(anyhow::Error::from)?;
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            // The agent loop executes a deep async dispatch chain (turn runner ->
-            // planned driver -> canonical executor -> capability stage -> host
-            // dispatch -> first-party tool); a single poll of one capability
-            // dispatch consumes ~1.9 MB of stack in debug builds, which overflows
-            // the default 2 MB worker thread. Match the 8 MB stack the codebase
-            // already uses for deep work (see ironclaw_reborn_cli traces tests and
-            // src/cli stack_size sites).
-            .thread_stack_size(8 * 1024 * 1024)
-            .build()
-            .context("failed to build tokio runtime for `serve`")?;
-
         rt.block_on(async move {
             let trigger_poller_enabled = runtime_input.trigger_poller.enabled;
             let sso_enabled = sso_startup.is_some();
@@ -663,6 +669,10 @@ impl ServeCommand {
             shutdown_result.context("Reborn runtime shutdown failed")?;
             Ok::<(), anyhow::Error>(())
         })?;
+
+        // Flush and shut down the OTLP batch exporter so in-flight spans are
+        // delivered before the process exits.
+        crate::runtime::shutdown_otel();
 
         Ok(())
     }

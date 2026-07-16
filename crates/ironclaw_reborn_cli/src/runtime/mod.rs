@@ -47,7 +47,22 @@ mod trigger_poller;
 
 use trigger_poller::trigger_poller_settings;
 
+/// Holds the OTLP tracer provider so we can flush/shutdown it on exit.
+static OTEL_PROVIDER: std::sync::OnceLock<opentelemetry_sdk::trace::TracerProvider> =
+    std::sync::OnceLock::new();
+
+/// Flush and shut down the OTLP exporter. Call this before process exit when
+/// the serve command terminates so in-flight spans are flushed.
+pub(crate) fn shutdown_otel() {
+    if let Some(provider) = OTEL_PROVIDER.get() {
+        if let Err(e) = provider.shutdown() {
+            eprintln!("[OTEL] shutdown error: {e}");
+        }
+    }
+}
+
 pub(crate) fn init_tracing() {
+    use opentelemetry::trace::TracerProvider as _;
     use tracing_subscriber::Layer;
     use tracing_subscriber::fmt;
     use tracing_subscriber::prelude::*;
@@ -69,6 +84,59 @@ pub(crate) fn init_tracing() {
         "IRONCLAW_REBORN_OPERATOR_LOG",
         "info,ironclaw_runner=debug,ironclaw_host_runtime=debug",
     );
+
+    // OTLP trace layer: only active when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    // Must be called after entering a Tokio runtime so the BatchSpanProcessor
+    // can spawn its background export task (serve.rs runs init_tracing inside
+    // rt.enter()).
+    let otel_layer = if let Ok(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+        let service_name =
+            std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "ironclaw".to_string());
+        let otlp_endpoint = format!("{}/v1/traces", endpoint.trim_end_matches('/'));
+
+        let build_result = (|| -> anyhow::Result<_> {
+            use opentelemetry_otlp::WithExportConfig;
+
+            // SpanExporter::builder() -> with_http() -> with_endpoint() -> build()
+            // is the 0.27 API (new_exporter() was removed).
+            let exporter = opentelemetry_otlp::SpanExporter::builder()
+                .with_http()
+                .with_endpoint(otlp_endpoint)
+                .build()
+                .map_err(|e| anyhow::anyhow!("OTLP exporter: {e}"))?;
+
+            let resource = opentelemetry_sdk::Resource::new(vec![opentelemetry::KeyValue::new(
+                "service.name",
+                service_name,
+            )]);
+
+            // TracerProvider (not SdkTracerProvider) is the concrete struct in 0.27;
+            // with_batch_exporter needs a RuntimeChannel — Tokio, since init_tracing()
+            // runs inside rt.enter() in serve.rs.
+            let provider = opentelemetry_sdk::trace::TracerProvider::builder()
+                .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+                .with_resource(resource)
+                .build();
+
+            let tracer = provider.tracer("ironclaw");
+            let _ = OTEL_PROVIDER.set(provider);
+            Ok(tracing_opentelemetry::OpenTelemetryLayer::new(tracer))
+        })();
+
+        match build_result {
+            Ok(layer) => {
+                eprintln!("[OTEL] OTLP trace exporter initialised → {endpoint}");
+                Some(layer)
+            }
+            Err(e) => {
+                eprintln!("[OTEL] failed to init trace exporter: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let _ = tracing_subscriber::registry()
         .with(
             fmt::layer()
@@ -76,6 +144,7 @@ pub(crate) fn init_tracing() {
                 .with_filter(stderr_filter),
         )
         .with(OperatorLogLayer.with_filter(operator_filter))
+        .with(otel_layer)
         .try_init();
 }
 

@@ -95,6 +95,12 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "io-
 tokio-util = { version = "0.7", features = ["rt"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# OpenTelemetry tracing — active when OTEL_EXPORTER_OTLP_ENDPOINT is set at runtime
+opentelemetry = { version = "0.27", features = ["trace"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "trace"] }
+opentelemetry-otlp = { version = "0.27", features = ["http-proto", "reqwest-client"] }
+tracing-opentelemetry = "0.28"
+
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 
 [dev-dependencies]

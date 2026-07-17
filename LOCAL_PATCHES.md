@@ -88,6 +88,7 @@ _Last rebased onto `origin/main` on **2026-07-16** (upstream tip `7ae6c411b`)._
 9. **Fork maintenance tooling** — `sync-upstream.sh` + this file.
 10. **Dep secfix** — `quinn-proto` 0.11.16 (RUSTSEC-2026-0185). *Re-applied after the rebase; the `crossbeam-epoch` half was dropped — upstream now ships 0.9.20 (RUSTSEC-2026-0204).*
 11. **OTel OTLP tracing for `reborn serve`** — active when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. *(2026-07-16: re-homed after upstream removed `crates/ironclaw_engine` (#5545). OTLP init/shutdown now in `reborn_cli/src/runtime/mod.rs` + `commands/serve.rs`; `opentelemetry 0.27` / `tracing-opentelemetry 0.28`; verified compiled into the release binary. The old per-action `tracing::info!` lines were intentionally not re-homed — the OTLP layer already captures the new `ironclaw_runner` instrumentation.)*
+12. **Propagate W3C `traceparent` to MCP shim calls** (Tier 2) — `ironclaw_mcp` injects the current span trace-context into outbound MCP headers (post-plan, like the session header); `reborn_cli` init_tracing registers the `TraceContextPropagator`. Shim spans join the IronClaw trace in Tempo end-to-end (turn -> tool -> shim). No-op when OTLP is off.
 
 ## Retired / notes
 

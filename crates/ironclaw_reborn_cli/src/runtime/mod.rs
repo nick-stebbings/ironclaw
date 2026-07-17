@@ -120,6 +120,11 @@ pub(crate) fn init_tracing() {
 
             let tracer = provider.tracer("ironclaw");
             let _ = OTEL_PROVIDER.set(provider);
+            // local: W3C trace-context propagator so outbound MCP calls carry a
+            // traceparent (Tier 2 shim tracing).
+            opentelemetry::global::set_text_map_propagator(
+                opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+            );
             Ok(tracing_opentelemetry::OpenTelemetryLayer::new(tracer))
         })();
 

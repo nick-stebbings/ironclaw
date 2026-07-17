@@ -505,6 +505,18 @@ where
             }
         }
 
+        // local: propagate the current trace context (W3C traceparent) to the MCP
+        // shim so its spans join the IronClaw trace end-to-end (turn -> tool ->
+        // shim -> upstream). Added post-plan like the session header; no-op when
+        // OTLP tracing is off (no active OTel span => empty carrier).
+        {
+            use tracing_opentelemetry::OpenTelemetrySpanExt;
+            let cx = tracing::Span::current().context();
+            let mut carrier = std::collections::HashMap::<String, String>::new();
+            opentelemetry::global::get_text_map_propagator(|p| p.inject_context(&cx, &mut carrier));
+            headers.extend(carrier);
+        }
+
         let response_body_limit = effective_mcp_response_body_limit(
             planned.plan.response_body_limit,
             request.max_output_bytes,

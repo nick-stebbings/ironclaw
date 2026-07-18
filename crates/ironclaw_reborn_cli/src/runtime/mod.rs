@@ -145,6 +145,10 @@ pub(crate) fn init_tracing() {
     let _ = tracing_subscriber::registry()
         .with(
             fmt::layer()
+                .json()
+                .flatten_event(true)
+                .with_current_span(true)
+                .with_span_list(false)
                 .with_writer(std::io::stderr)
                 .with_filter(stderr_filter),
         )

@@ -271,7 +271,20 @@ where
             .account_records_for_owner(&owner)
             .await?
             .into_iter()
-            .filter(|account| validate_reusable_manual_token_account(account, pending).is_ok())
+            .filter(|account| {
+                // local: only reuse an account on the SAME auth surface as the
+                // pending push. CredentialAccountOwnerScope (used by
+                // account_records_for_owner) is surface-agnostic and returns
+                // accounts across surfaces, but flow completion
+                // (complete_manual_token) and runtime credential resolution read a
+                // specific surface (Api). Reusing a different-surface account
+                // (e.g. a legacy Callback one from before manual-token pushes moved
+                // to Api) mutates it in place at that surface, then completion reads
+                // the pending surface and fails with CredentialMissing. Same-surface
+                // reuse keeps the account where completion + resolution look.
+                account.scope.surface == pending.scope.surface
+                    && validate_reusable_manual_token_account(account, pending).is_ok()
+            })
             .collect::<Vec<_>>();
         matches.sort_by_key(|account| (account.updated_at, account.created_at, account.id));
         Ok(matches.pop())

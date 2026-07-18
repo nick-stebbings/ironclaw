@@ -7,7 +7,7 @@ pub(super) async fn manual_token_submit_handler(
     Extension(caller): Extension<WebUiAuthenticatedCaller>,
     Json(request): Json<ManualTokenSubmitRequest>,
 ) -> Result<Json<ManualTokenSubmitResponse>, ProductAuthRouteFailure> {
-    let mut scope = scope_from_authenticated_caller_parts(
+    let scope = scope_from_authenticated_caller_parts(
         &caller,
         &ScopeFields {
             session_id: request.session_id.clone(),
@@ -15,11 +15,6 @@ pub(super) async fn manual_token_submit_handler(
             invocation_id: None,
         },
     )?;
-    // local: broker manual-token pushes must land on the Api surface (where
-    // runtime credential resolution reads: runtime_credentials.rs uses
-    // AuthSurface::Api). scope_from_authenticated_caller_parts hardcodes
-    // Callback (shared with the OAuth redirect flow), so re-stamp here.
-    scope.surface = ironclaw_auth::AuthSurface::Api;
     let provider = AuthProviderId::new(request.provider)
         .map_err(|_| ProductAuthRouteFailure::invalid_request())?;
     let label = CredentialAccountLabel::new(request.account_label)
@@ -141,12 +136,7 @@ pub(super) async fn manual_token_setup_handler(
     Extension(caller): Extension<WebUiAuthenticatedCaller>,
     Json(request): Json<ManualTokenSetupRequest>,
 ) -> Result<Json<ManualTokenSetupResponse>, ProductAuthRouteFailure> {
-    let mut scope = scope_from_authenticated_caller_parts(&caller, &request.scope)?;
-    // local: broker manual-token pushes must land on the Api surface (where
-    // runtime credential resolution reads: runtime_credentials.rs uses
-    // AuthSurface::Api). scope_from_authenticated_caller_parts hardcodes
-    // Callback (shared with the OAuth redirect flow), so re-stamp here.
-    scope.surface = ironclaw_auth::AuthSurface::Api;
+    let scope = scope_from_authenticated_caller_parts(&caller, &request.scope)?;
     let invocation_id = scope.resource.invocation_id;
     let provider = AuthProviderId::new(request.provider)
         .map_err(|_| ProductAuthRouteFailure::invalid_request())?;
@@ -181,13 +171,8 @@ pub(super) async fn manual_token_secret_submit_handler(
     // submit projection is returned.
     // invocation_id is required: it must be the id returned by setup so the
     // interaction service can match the pending scope.
-    let mut scope =
+    let scope =
         scope_from_authenticated_caller_parts_requiring_invocation(&caller, &request.scope)?;
-    // local: broker manual-token pushes must land on the Api surface (where
-    // runtime credential resolution reads: runtime_credentials.rs uses
-    // AuthSurface::Api). scope_from_authenticated_caller_parts hardcodes
-    // Callback (shared with the OAuth redirect flow), so re-stamp here.
-    scope.surface = ironclaw_auth::AuthSurface::Api;
     let interaction_id = parse_interaction_id(&request.interaction_id)?;
     // Validate the token before any async work. On validation failure, abandon
     // the interaction so it does not remain active until its TTL expires.

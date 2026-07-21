@@ -102,8 +102,8 @@ impl ResolvedRunProfile {
             },
             resource_budget_policy: ResourceBudgetPolicy {
                 tier: ResourceBudgetTier::from_trusted_static("interactive_standard"),
-                max_model_calls: 32,
-                max_capability_invocations: 64,
+                max_model_calls: 512,
+                max_capability_invocations: 1024,
             },
             personal_context_policy: PersonalContextPolicy::Excluded,
             runtime_constraints: RuntimeProfileConstraints {

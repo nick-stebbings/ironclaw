@@ -288,7 +288,7 @@ impl RunProfileDefinition {
             });
             return ResourceBudgetPolicy {
                 tier: ResourceBudgetTier::from_trusted_static("mission_standard"),
-                max_model_calls: self.resource_budget_policy.max_model_calls.min(128),
+                max_model_calls: self.resource_budget_policy.max_model_calls.min(256),
                 max_capability_invocations: self
                     .resource_budget_policy
                     .max_capability_invocations
@@ -345,8 +345,8 @@ fn interactive_profile() -> RunProfileDefinition {
         },
         resource_budget_policy: ResourceBudgetPolicy {
             tier: ResourceBudgetTier::from_trusted_static("interactive_standard"),
-            max_model_calls: 32,
-            max_capability_invocations: 64,
+            max_model_calls: 512,
+            max_capability_invocations: 1024,
         },
         personal_context_policy: PersonalContextPolicy::Excluded,
         runtime_constraints: RuntimeProfileConstraints {

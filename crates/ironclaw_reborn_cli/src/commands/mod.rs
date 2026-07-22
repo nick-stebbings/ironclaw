@@ -1,5 +1,8 @@
 use clap::Subcommand;
 
+#[cfg(feature = "libsql")]
+pub(crate) mod budget;
+
 pub(crate) mod channels;
 pub(crate) mod completion;
 pub(crate) mod config;
@@ -28,6 +31,9 @@ pub(crate) mod webui_auth;
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    #[cfg(feature = "libsql")]
+    #[command(about = "Inspect or reset durable budget accounts in an offline libSQL database")]
+    Budget(budget::BudgetCommand),
     /// Inspect configured Reborn channels.
     Channels(channels::ChannelsCommand),
     /// Generate shell completion scripts.
@@ -69,6 +75,8 @@ pub(crate) enum Command {
 impl Command {
     pub(crate) fn execute(self) -> anyhow::Result<()> {
         match self {
+            #[cfg(feature = "libsql")]
+            Self::Budget(command) => command.execute(),
             Self::Channels(command) => command.execute(),
             Self::Completion(command) => command.execute(),
             Self::Config(command) => {

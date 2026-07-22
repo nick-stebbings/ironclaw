@@ -490,6 +490,8 @@ fn help_mentions_reborn_commands() {
     // The dedicated `serve_*` tests below also `#[cfg]` themselves.
     #[cfg(feature = "webui-v2-beta")]
     assert!(stdout.contains("serve"), "stdout: {stdout}");
+    #[cfg(feature = "libsql")]
+    assert!(stdout.contains("budget"), "stdout: {stdout}");
     assert!(stdout.contains("skills"), "stdout: {stdout}");
 }
 
@@ -4086,4 +4088,31 @@ fn local_yolo_command(temp: &tempfile::TempDir, args: &[&str]) -> Command {
         .env("IRONCLAW_REBORN_PROFILE", "local-dev-yolo")
         .env("HOME", home);
     command
+}
+
+#[cfg(feature = "libsql")]
+#[test]
+fn budget_reset_period_requires_explicit_confirmation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let output = Command::new(reborn_bin())
+        .args([
+            "budget",
+            "reset-period",
+            "--database",
+            temp.path()
+                .join("missing.db")
+                .to_str()
+                .expect("utf-8 temporary path"),
+            "--user",
+            "pilot-web",
+        ])
+        .output()
+        .expect("budget reset-period should run");
+
+    assert!(!output.status.success(), "reset must require confirmation");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("reset-period requires --confirm-reset"),
+        "stderr: {stderr}"
+    );
 }

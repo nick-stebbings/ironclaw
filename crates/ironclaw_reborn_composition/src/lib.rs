@@ -29,6 +29,8 @@ mod admin_user_directory;
 mod approval_test_support;
 mod automation;
 mod blocked_auth_resume;
+#[cfg(feature = "libsql")]
+mod budget_admin;
 mod error;
 mod extension_host;
 mod factory;
@@ -71,6 +73,8 @@ mod webui;
 
 pub use admin_token::AdminApiTokenMinter;
 pub use automation::facade::RebornAutomationProductFacade;
+#[cfg(feature = "libsql")]
+pub use budget_admin::{LibSqlBudgetAdmin, RebornBudgetAccountStatus, RebornBudgetAdminError};
 pub use error::RebornBuildError;
 pub use extension_host::extension_lifecycle_command::{
     RebornExtensionLifecycleCommand, RebornExtensionLifecycleCommandError,

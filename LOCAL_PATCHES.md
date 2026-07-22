@@ -78,7 +78,7 @@ missing it and must be reconciled by hand.
 
 _Last rebased onto `origin/main` on **2026-07-16** (upstream tip `7ae6c411b`)._
 
-1. **`build-all.sh` feature flags** — builds `ironclaw_reborn_cli` with `webui-v2-beta,postgres` (else `serve` is compiled out).
+1. **`build-all.sh` feature flags** — builds `ironclaw_reborn_cli` with `webui-v2-beta,postgres,libsql` (else `serve` is compiled out).
 2. **Env opt-out for private-IP egress denial** — tailnet MCP shims (`IRONCLAW_REBORN_EXTENSION_ALLOW_PRIVATE_EGRESS=1`). *(2026-07-16: merged with upstream's new `has_egress_targets` gate + `is_web_access_exa_mcp` rename.)*
 3. **Env allowlist for non-gsuite google-account requesters** — broker REST shim (`google-rest`).
 4. **Log skill-activation outcome** — activated vs passthrough, per turn.
@@ -102,6 +102,8 @@ _Last rebased onto `origin/main` on **2026-07-16** (upstream tip `7ae6c411b`)._
     `commitment-triage` hijacked "plan weekly content" from `content-weekly-plan-now`).
     `ironclaw_reborn_composition/extension_host/bundled_skills.rs::ensure_bundled_reborn_skills_installed` (the loader reborn actually uses — it writes the bundle into /projects/system/skills every boot; the ironclaw_skills registry path is NOT it). Requires the var in the instance `.env` + launcher
     `env -i` allowlist.
+
+15. **Native budget administration**  `ironclaw-reborn budget status|reset-period` opens an offline libSQL ledger through the filesystem governor. Reset writes one durable `reset_period` journal delta while preserving limits and active reservations. `scripts/reborn-budgetctl.sh` wraps live instance resets in stop/backup/reset/restart/health-check with automatic rollback; `/opt/ironclaw/Makefile` exposes `budget-status` and confirmation-gated `budget-reset`.
 
 ## Retired / notes
 

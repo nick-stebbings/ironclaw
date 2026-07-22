@@ -32,7 +32,7 @@ use crate::{
     ResourceGovernorStore, ResourceLimits, ResourceReceipt, ResourceTally, SystemClock,
     account_snapshot_in_state, advance_period_if_rolled_over, emit_reserve_events,
     most_specific_account, reconcile_in_state, release_in_state, reserve_with_outcome_in_state,
-    set_limit_in_state,
+    reset_period_in_state, set_limit_in_state,
 };
 use crate::{ResourceEstimate, ResourceUsage};
 
@@ -316,6 +316,40 @@ where
         Err(error)
     }
 
+    pub fn reset_period(
+        &self,
+        account: ResourceAccount,
+    ) -> Result<Option<AccountSnapshot>, ResourceError> {
+        let authority = self.authority()?;
+        authority.check_available()?;
+        let now = self.clock.now();
+        let (snapshot, pending) = {
+            let _commit = authority.lock_commit_for_accounts(std::slice::from_ref(&account))?;
+            let mut locked = authority.lock_accounts(std::slice::from_ref(&account))?;
+            let mut state =
+                locked.state_for_accounts(std::slice::from_ref(&account), HashMap::new());
+            if !reset_period_in_state(&mut state, &account, now) {
+                return Ok(None);
+            }
+            let snapshot = account_snapshot_in_state(&mut state, &account, now)
+                .ok_or_else(|| storage_error("reset period removed the budget account"))?;
+            locked.write_accounts_from_state(std::slice::from_ref(&account), &state);
+            let delta = ResourceGovernorDelta::ResetPeriod {
+                account: account.clone(),
+                at: now,
+            };
+            let pending = match self.enqueue_delta(&authority, delta) {
+                Ok(pending) => pending,
+                Err(error) => return self.invalidate_authority(&authority, error),
+            };
+            (snapshot, pending)
+        };
+        if let Err(error) = self.finish_delta(&authority, pending) {
+            return self.invalidate_authority(&authority, error);
+        }
+        Ok(Some(snapshot))
+    }
+
     pub fn reserved_for(&self, account: &ResourceAccount) -> Result<ResourceTally, ResourceError> {
         let authority = self.authority()?;
         authority.check_available()?;
@@ -452,10 +486,14 @@ where
         authority.check_available()?;
         let now = self.clock.now();
         let accounts = ResourceAccount::cascade(&scope);
-        let (outcome, pending) = {
+        let (result, pending) = {
             let _commit = authority.lock_commit_for_accounts(&accounts)?;
             let mut reservations = authority.lock_reservations()?;
             let mut locked = authority.lock_accounts(&accounts)?;
+            let before = accounts
+                .iter()
+                .map(|account| (account.clone(), locked.account_parts(account)))
+                .collect::<Vec<_>>();
             let mut reservation_subset = HashMap::new();
             if let Some(existing) = reservations.get(&reservation_id) {
                 reservation_subset.insert(reservation_id, existing.clone());
@@ -468,8 +506,8 @@ where
                 reservation_id,
                 now,
             );
+            locked.write_accounts_from_state(&accounts, &state);
             if result.is_ok() {
-                locked.write_accounts_from_state(&accounts, &state);
                 let record = state
                     .reservations
                     .get(&reservation_id)
@@ -494,19 +532,33 @@ where
                         Ok(pending) => pending,
                         Err(error) => return self.invalidate_authority(&authority, error),
                     };
-                    (outcome, pending)
+                    (Ok(outcome), vec![pending])
                 }
                 Err(error) => {
-                    let result = Err(error);
-                    emit_reserve_events(self.event_sink.as_ref(), &result, now);
-                    return result;
+                    // Period rollover happens before limit evaluation. Keep that
+                    // maintenance durable even when the new request itself needs
+                    // approval or exceeds the hard limit; otherwise every denied
+                    // request reloads the stale window and can never advance it.
+                    let mut pending = Vec::new();
+                    for (account, before) in before {
+                        if before == locked.account_parts(&account) {
+                            continue;
+                        }
+                        let delta = ResourceGovernorDelta::AccountSnapshot { account, at: now };
+                        match self.enqueue_delta(&authority, delta) {
+                            Ok(delta) => pending.push(delta),
+                            Err(error) => return self.invalidate_authority(&authority, error),
+                        }
+                    }
+                    (Err(error), pending)
                 }
             }
         };
-        if let Err(error) = self.finish_delta(&authority, pending) {
-            return self.invalidate_authority(&authority, error);
+        for pending in pending {
+            if let Err(error) = self.finish_delta(&authority, pending) {
+                return self.invalidate_authority(&authority, error);
+            }
         }
-        let result = Ok(outcome);
         emit_reserve_events(self.event_sink.as_ref(), &result, now);
         result
     }
@@ -1032,5 +1084,152 @@ mod tests {
                 },
             )
             .expect("rolled-over spend must not be resurrected by compaction replay");
+    }
+
+    #[test]
+    fn reset_period_preserves_limits_reservations_and_replays() {
+        let scoped = scoped_resources_fs();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-07-22T21:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let clock = FakeClock::new(now);
+        let scope = sample_scope();
+        let account = ResourceAccount::tenant(scope.tenant_id.clone());
+        let governor = FilesystemResourceGovernor::new(Arc::clone(&scoped))
+            .with_clock(Arc::new(clock.clone()));
+        let limits = ResourceLimits {
+            max_usd: Some(dec!(15.00)),
+            period: BudgetPeriod::Rolling24h,
+            thresholds: crate::BudgetThresholds::RECOMMENDED,
+            ..ResourceLimits::default()
+        };
+        governor.set_limit(account.clone(), limits.clone()).unwrap();
+        let spent = governor
+            .reserve(
+                scope.clone(),
+                ResourceEstimate {
+                    usd: Some(dec!(4.00)),
+                    ..ResourceEstimate::default()
+                },
+            )
+            .unwrap();
+        governor
+            .reconcile(
+                spent.id,
+                ResourceUsage {
+                    usd: dec!(4.00),
+                    ..ResourceUsage::default()
+                },
+            )
+            .unwrap();
+        let active = governor
+            .reserve(
+                scope,
+                ResourceEstimate {
+                    usd: Some(dec!(1.00)),
+                    ..ResourceEstimate::default()
+                },
+            )
+            .unwrap();
+
+        let reset = governor
+            .reset_period(account.clone())
+            .unwrap()
+            .expect("limited account");
+        assert_eq!(reset.limits, Some(limits.clone()));
+        assert_eq!(reset.ledger.spent.usd, dec!(0));
+        assert_eq!(reset.ledger.reserved.usd, dec!(1.00));
+        assert_eq!(reset.ledger.period_end, now + chrono::Duration::hours(24));
+
+        drop(governor);
+        let reloaded = FilesystemResourceGovernor::new(scoped).with_clock(Arc::new(clock));
+        let replayed = reloaded.account_snapshot(&account).unwrap().unwrap();
+        assert_eq!(replayed.limits, Some(limits));
+        assert_eq!(replayed.ledger.spent.usd, dec!(0));
+        assert_eq!(replayed.ledger.reserved.usd, dec!(1.00));
+        reloaded.release(active.id).unwrap();
+        assert_eq!(
+            reloaded
+                .account_snapshot(&account)
+                .unwrap()
+                .unwrap()
+                .ledger
+                .reserved
+                .usd,
+            dec!(0)
+        );
+    }
+
+    #[test]
+    fn denied_reservation_persists_rolled_over_window() {
+        let scoped = scoped_resources_fs();
+        let start = chrono::DateTime::parse_from_rfc3339("2026-05-21T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let clock = FakeClock::new(start);
+        let scope = sample_scope();
+        let account = ResourceAccount::tenant(scope.tenant_id.clone());
+        let governor = FilesystemResourceGovernor::new(Arc::clone(&scoped))
+            .with_clock(Arc::new(clock.clone()));
+
+        governor
+            .set_limit(
+                account.clone(),
+                ResourceLimits {
+                    max_usd: Some(dec!(10.00)),
+                    period: BudgetPeriod::Rolling24h,
+                    thresholds: crate::BudgetThresholds {
+                        warn_at: 0.75,
+                        pause_at: 0.90,
+                    },
+                    ..ResourceLimits::default()
+                },
+            )
+            .unwrap();
+        let reservation = governor
+            .reserve(
+                scope.clone(),
+                ResourceEstimate {
+                    usd: Some(dec!(1.00)),
+                    ..ResourceEstimate::default()
+                },
+            )
+            .unwrap();
+        governor
+            .reconcile(
+                reservation.id,
+                ResourceUsage {
+                    usd: dec!(1.00),
+                    ..ResourceUsage::default()
+                },
+            )
+            .unwrap();
+
+        let attempt_at = start + chrono::Duration::hours(25);
+        clock.set(attempt_at);
+        let error = governor
+            .reserve(
+                scope,
+                ResourceEstimate {
+                    usd: Some(dec!(9.50)),
+                    ..ResourceEstimate::default()
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, ResourceError::RequiresApproval { .. }));
+
+        // Move behind the failed attempt while staying past the original
+        // anchor. A discarded rollover would now produce a different window.
+        clock.set(start + chrono::Duration::hours(24) + chrono::Duration::minutes(30));
+        let expected_end = attempt_at + chrono::Duration::hours(24);
+        let snapshot = governor.account_snapshot(&account).unwrap().unwrap();
+        assert_eq!(snapshot.ledger.period_end, expected_end);
+        assert_eq!(snapshot.ledger.spent.usd, dec!(0));
+
+        drop(governor);
+        let reloaded = FilesystemResourceGovernor::new(scoped).with_clock(Arc::new(clock.clone()));
+        let snapshot = reloaded.account_snapshot(&account).unwrap().unwrap();
+        assert_eq!(snapshot.ledger.period_end, expected_end);
+        assert_eq!(snapshot.ledger.spent.usd, dec!(0));
     }
 }

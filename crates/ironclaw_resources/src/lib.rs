@@ -2038,6 +2038,24 @@ pub(crate) fn set_limit_in_state(
     state.period_anchors.insert(account, period_end);
 }
 
+pub(crate) fn reset_period_in_state(
+    state: &mut ResourceState,
+    account: &ResourceAccount,
+    now: DateTime<Utc>,
+) -> bool {
+    let Some(period) = state
+        .limits
+        .get(account)
+        .map(|limits| limits.period.clone())
+    else {
+        return false;
+    };
+    state.usage_by_account.remove(account);
+    let (_, period_end) = period_bounds(&period, now);
+    state.period_anchors.insert(account.clone(), period_end);
+    true
+}
+
 pub(crate) fn advance_period_if_rolled_over(
     state: &mut ResourceState,
     account: &ResourceAccount,

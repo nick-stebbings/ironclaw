@@ -11,7 +11,8 @@ use tracing::warn;
 use crate::{
     FilesystemResourceGovernorStore, ResourceAccount, ResourceError, ResourceEstimate,
     ResourceGovernorStore, ResourceLimits, ResourceState, ResourceUsage, account_snapshot_in_state,
-    reconcile_in_state, release_in_state, reserve_with_outcome_in_state, set_limit_in_state,
+    reconcile_in_state, release_in_state, reserve_with_outcome_in_state, reset_period_in_state,
+    set_limit_in_state,
 };
 
 use super::{fs_error, storage_error};
@@ -46,6 +47,10 @@ pub(super) enum ResourceGovernorDelta {
         limits: ResourceLimits,
         at: DateTime<Utc>,
     },
+    ResetPeriod {
+        account: ResourceAccount,
+        at: DateTime<Utc>,
+    },
     Reserve {
         scope: ResourceScope,
         estimate: ResourceEstimate,
@@ -76,6 +81,10 @@ impl ResourceGovernorDelta {
                 at,
             } => {
                 set_limit_in_state(state, account, limits, at);
+                Ok(())
+            }
+            Self::ResetPeriod { account, at } => {
+                let _ = reset_period_in_state(state, &account, at);
                 Ok(())
             }
             Self::Reserve {

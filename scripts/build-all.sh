@@ -21,7 +21,8 @@ echo ""
 echo "Building IronClaw Reborn (WebChat v2)..."
 # webui-v2-beta: enables 'ironclaw-reborn serve' (HTTP gateway)
 # postgres:      enables production PostgreSQL storage backend
-/home/deploy/.cargo/bin/cargo build --release -p ironclaw_reborn_cli     --features webui-v2-beta,postgres
+# libsql:       enables embedded storage and the offline budget admin command
+/home/deploy/.cargo/bin/cargo build --release -p ironclaw_reborn_cli     --features webui-v2-beta,postgres,libsql
 
 echo ""
 echo "Done."

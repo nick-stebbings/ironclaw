@@ -23,11 +23,20 @@ ENV_FILE="/etc/ironclaw/instances/${INSTANCE_ID}.env"
 UNIT="ironclaw-reborn@${INSTANCE_ID}.service"
 BINARY="${IRONCLAW_REBORN_BIN:-/opt/ironclaw/src/target/release/ironclaw-reborn}"
 
-[[ -r "$ENV_FILE" ]] || { echo "ERROR: missing $ENV_FILE" >&2; exit 1; }
 [[ -x "$BINARY" ]] || { echo "ERROR: budget-capable binary not found: $BINARY" >&2; exit 1; }
 
+MAIN_PID="$(systemctl show --property MainPID --value "$UNIT")"
+[[ "$MAIN_PID" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ERROR: $UNIT has no running main process" >&2
+  exit 1
+}
+
 env_value() {
-  sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1
+  if [[ -r "$ENV_FILE" ]]; then
+    sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1
+  else
+    tr '\0' '\n' < "/proc/${MAIN_PID}/environ" | sed -n "s/^$1=//p" | tail -n 1
+  fi
 }
 
 HOST_ROOT="$(env_value IRONCLAW_INSTANCE_HOST_ROOT)"
@@ -37,13 +46,8 @@ TENANT_ID="${IRONCLAW_BUDGET_TENANT_ID:-reborn-cli}"
 
 [[ -n "$HOST_ROOT" ]] || HOST_ROOT="/var/lib/ironclaw/instances/${INSTANCE_ID}"
 [[ -n "$USER_ID" ]] || USER_ID="${INSTANCE_ID}-web"
-[[ -n "$BIND_PORT" ]] || { echo "ERROR: missing IRONCLAW_BIND_PORT in $ENV_FILE" >&2; exit 1; }
+[[ -n "$BIND_PORT" ]] || { echo "ERROR: missing IRONCLAW_BIND_PORT in instance environment" >&2; exit 1; }
 
-MAIN_PID="$(systemctl show --property MainPID --value "$UNIT")"
-[[ "$MAIN_PID" =~ ^[1-9][0-9]*$ ]] || {
-  echo "ERROR: $UNIT has no running main process" >&2
-  exit 1
-}
 INSTANCE_DB_DIR="/proc/${MAIN_PID}/root/srv/ironclaw-instance/home/local-dev"
 DATABASE="reborn-local-dev.db"
 DATABASE_DISPLAY="${HOST_ROOT}/home/local-dev/${DATABASE}"

@@ -207,7 +207,7 @@ case "$ACTION" in
     HEALTH_URL="http://127.0.0.1:${BIND_PORT}/api/health"
     HEALTHY=0
     for _ in $(seq 1 45); do
-      if systemctl is-active --quiet "$UNIT" && curl -fsS --max-time 3 "$HEALTH_URL" >/dev/null; then
+      if systemctl is-active --quiet "$UNIT" && curl -fsS --max-time 3 "$HEALTH_URL" >/dev/null 2>&1; then
         HEALTHY=1
         break
       fi

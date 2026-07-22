@@ -19,6 +19,7 @@ CONFIRM="${3:-}"
   echo "ERROR: invalid instance id: $INSTANCE_ID" >&2
   exit 2
 }
+
 ENV_FILE="/etc/ironclaw/instances/${INSTANCE_ID}.env"
 UNIT="ironclaw-reborn@${INSTANCE_ID}.service"
 BINARY="${IRONCLAW_REBORN_BIN:-/opt/ironclaw/src/target/release/ironclaw-reborn}"
@@ -46,31 +47,63 @@ TENANT_ID="${IRONCLAW_BUDGET_TENANT_ID:-reborn-cli}"
 
 [[ -n "$HOST_ROOT" ]] || HOST_ROOT="/var/lib/ironclaw/instances/${INSTANCE_ID}"
 [[ -n "$USER_ID" ]] || USER_ID="${INSTANCE_ID}-web"
-[[ -n "$BIND_PORT" ]] || { echo "ERROR: missing IRONCLAW_BIND_PORT in instance environment" >&2; exit 1; }
+[[ -n "$BIND_PORT" ]] || {
+  echo "ERROR: missing IRONCLAW_BIND_PORT in instance environment" >&2
+  exit 1
+}
 
 INSTANCE_DB_DIR="/proc/${MAIN_PID}/root/srv/ironclaw-instance/home/local-dev"
-DATABASE_NAME="reborn-local-dev.db"
+DATABASE="reborn-local-dev.db"
+DATABASE_DISPLAY="${HOST_ROOT}/home/local-dev/${DATABASE}"
 cd "$INSTANCE_DB_DIR" || {
   echo "ERROR: cannot hold instance database directory: $INSTANCE_DB_DIR" >&2
   exit 1
 }
-DATABASE="/proc/$$/cwd/${DATABASE_NAME}"
-DATABASE_DISPLAY="${HOST_ROOT}/home/local-dev/${DATABASE_NAME}"
-[[ -f "$DATABASE" ]] || { echo "ERROR: budget database not found: $DATABASE_DISPLAY" >&2; exit 1; }
+[[ -f "$DATABASE" ]] || {
+  echo "ERROR: budget database not found: $DATABASE_DISPLAY" >&2
+  exit 1
+}
+
+WORK_DIR=""
+cleanup_work_dir() {
+  if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
+    rm -rf -- "$WORK_DIR"
+  fi
+}
+
+stage_database_copy() {
+  local destination="$1"
+  cp -- "$DATABASE" "$destination/$DATABASE"
+  if [[ -e "${DATABASE}-wal" ]]; then
+    cp -- "${DATABASE}-wal" "$destination/${DATABASE}-wal"
+  fi
+}
 
 budget_command() {
-  "$BINARY" budget "$@" --database "$DATABASE" --tenant "$TENANT_ID" --user "$USER_ID"
+  local database="$1"
+  shift
+  "$BINARY" budget "$@" --database "$database" --tenant "$TENANT_ID" --user "$USER_ID"
 }
 
 case "$ACTION" in
   status)
-    COPY="$(mktemp --suffix=.db)"
+    WORK_DIR="$(mktemp -d)"
+    FROZEN=0
     cleanup_status() {
-      rm -f "$COPY" "${COPY}-wal" "${COPY}-shm"
+      if [[ "$FROZEN" -eq 1 ]]; then
+        kill -CONT "$MAIN_PID" 2>/dev/null || true
+      fi
+      cleanup_work_dir
     }
     trap cleanup_status EXIT
-    sqlite3 "file:${DATABASE}?mode=ro" ".timeout 5000" ".backup '$COPY'"
-    "$BINARY" budget status --database "$COPY" --tenant "$TENANT_ID" --user "$USER_ID"
+    kill -STOP "$MAIN_PID"
+    FROZEN=1
+    stage_database_copy "$WORK_DIR"
+    kill -CONT "$MAIN_PID"
+    FROZEN=0
+    SNAPSHOT="$WORK_DIR/snapshot.db"
+    sqlite3 "$WORK_DIR/$DATABASE" ".timeout 5000" ".backup '$SNAPSHOT'"
+    budget_command "$SNAPSHOT" status
     ;;
 
   reset-period)
@@ -86,31 +119,45 @@ case "$ACTION" in
     TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
     BACKUP="${DATABASE}.bak-budget-reset-${TIMESTAMP}"
     BACKUP_DISPLAY="${DATABASE_DISPLAY}.bak-budget-reset-${TIMESTAMP}"
-    OWNER="$(stat -c '%u:%g' "$DATABASE")"
+    OWNER_UID="$(stat -c '%u' "$DATABASE")"
+    OWNER_GROUP="$(stat -c '%g' "$DATABASE")"
     MODE="$(stat -c '%a' "$DATABASE")"
+    if [[ "$EUID" -ne 0 && "$OWNER_UID" -ne "$EUID" ]]; then
+      echo "ERROR: database is owned by uid $OWNER_UID; run as that user or root" >&2
+      exit 1
+    fi
 
     STOPPED=0
     BACKUP_READY=0
     MUTATED=0
+
+    restore_metadata() {
+      chmod "$MODE" "$DATABASE"
+      if [[ "$EUID" -eq 0 ]]; then
+        chown "${OWNER_UID}:${OWNER_GROUP}" "$DATABASE"
+      fi
+    }
+
     rollback() {
       local original_rc="$1"
       trap - EXIT
       set +e
       if [[ "$MUTATED" -eq 1 && "$BACKUP_READY" -eq 1 ]]; then
-        echo "ERROR: reset failed; restoring $BACKUP" >&2
+        echo "ERROR: reset failed; restoring $BACKUP_DISPLAY" >&2
         systemctl stop "$UNIT"
         cp -- "$BACKUP" "$DATABASE"
-        chown "$OWNER" "$DATABASE"
-        chmod "$MODE" "$DATABASE"
         rm -f "${DATABASE}-wal" "${DATABASE}-shm"
+        restore_metadata
       else
         echo "ERROR: reset failed before database mutation" >&2
       fi
       if [[ "$STOPPED" -eq 1 || "$MUTATED" -eq 1 ]]; then
         systemctl start "$UNIT"
       fi
+      cleanup_work_dir
       exit "$original_rc"
     }
+
     on_exit() {
       local rc="$?"
       if [[ "$rc" -ne 0 ]]; then
@@ -126,25 +173,34 @@ case "$ACTION" in
       exit 1
     }
 
-    sqlite3 "file:${DATABASE}?mode=ro" ".timeout 5000" ".backup '$BACKUP'"
-    [[ "$(sqlite3 "$BACKUP" 'PRAGMA quick_check;')" == "ok" ]] || {
-      echo "ERROR: backup integrity check failed: $BACKUP" >&2
+    WORK_DIR="$(mktemp -d)"
+    stage_database_copy "$WORK_DIR"
+    BACKUP_STAGE="$WORK_DIR/pre-reset.db"
+    sqlite3 "$WORK_DIR/$DATABASE" ".timeout 5000" ".backup '$BACKUP_STAGE'"
+    [[ "$(sqlite3 "$BACKUP_STAGE" 'PRAGMA quick_check;')" == "ok" ]] || {
+      echo "ERROR: backup integrity check failed" >&2
       exit 1
     }
+    cp -- "$BACKUP_STAGE" "$BACKUP"
+    chmod "$MODE" "$BACKUP"
     BACKUP_READY=1
     echo "Backup: $BACKUP_DISPLAY"
 
-    MUTATED=1
-    budget_command reset-period --confirm-reset
+    CANDIDATE="$WORK_DIR/reset.db"
+    INSTALL_STAGE="$WORK_DIR/install.db"
+    cp -- "$BACKUP_STAGE" "$CANDIDATE"
+    budget_command "$CANDIDATE" reset-period --confirm-reset
+    sqlite3 "file:${CANDIDATE}?mode=ro" ".backup '$INSTALL_STAGE'"
+    [[ "$(sqlite3 "$INSTALL_STAGE" 'PRAGMA quick_check;')" == "ok" ]] || {
+      echo "ERROR: reset database integrity check failed" >&2
+      exit 1
+    }
+    budget_command "$INSTALL_STAGE" status >/dev/null
 
-    chown "$OWNER" "$DATABASE"
-    chmod "$MODE" "$DATABASE"
-    for ledger_file in "${DATABASE}-wal" "${DATABASE}-shm"; do
-      if [[ -e "$ledger_file" ]]; then
-        chown "$OWNER" "$ledger_file"
-        chmod 600 "$ledger_file"
-      fi
-    done
+    MUTATED=1
+    cp -- "$INSTALL_STAGE" "$DATABASE"
+    rm -f "${DATABASE}-wal" "${DATABASE}-shm"
+    restore_metadata
 
     systemctl start "$UNIT"
     STOPPED=0
@@ -168,6 +224,7 @@ case "$ACTION" in
 
     MUTATED=0
     trap - EXIT
+    cleanup_work_dir
     echo "Reset complete: $UNIT is stable and healthy"
     echo "Rollback backup retained: $BACKUP_DISPLAY"
     ;;

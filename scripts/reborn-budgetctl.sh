@@ -68,7 +68,7 @@ case "$ACTION" in
       rm -f "$COPY" "${COPY}-wal" "${COPY}-shm"
     }
     trap cleanup_status EXIT
-    sqlite3 "$DATABASE" ".timeout 5000" ".backup '$COPY'"
+    sqlite3 "file:${DATABASE}?mode=ro" ".timeout 5000" ".backup '$COPY'"
     "$BINARY" budget status --database "$COPY" --tenant "$TENANT_ID" --user "$USER_ID"
     ;;
 
@@ -125,7 +125,7 @@ case "$ACTION" in
       exit 1
     }
 
-    sqlite3 "$DATABASE" ".timeout 5000" ".backup '$BACKUP'"
+    sqlite3 "file:${DATABASE}?mode=ro" ".timeout 5000" ".backup '$BACKUP'"
     [[ "$(sqlite3 "$BACKUP" 'PRAGMA quick_check;')" == "ok" ]] || {
       echo "ERROR: backup integrity check failed: $BACKUP" >&2
       exit 1

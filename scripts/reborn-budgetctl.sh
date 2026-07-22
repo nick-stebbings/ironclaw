@@ -5,8 +5,8 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 usage:
-  sudo reborn-budgetctl.sh status <instance>
-  sudo reborn-budgetctl.sh reset-period <instance> --confirm-reset
+  reborn-budgetctl.sh status <instance>
+  reborn-budgetctl.sh reset-period <instance> --confirm-reset
 USAGE
 }
 
@@ -19,11 +19,6 @@ CONFIRM="${3:-}"
   echo "ERROR: invalid instance id: $INSTANCE_ID" >&2
   exit 2
 }
-[[ "$EUID" -eq 0 ]] || {
-  echo "ERROR: run this command with sudo" >&2
-  exit 1
-}
-
 ENV_FILE="/etc/ironclaw/instances/${INSTANCE_ID}.env"
 UNIT="ironclaw-reborn@${INSTANCE_ID}.service"
 BINARY="${IRONCLAW_REBORN_BIN:-/opt/ironclaw/src/target/release/ironclaw-reborn}"
@@ -44,8 +39,19 @@ TENANT_ID="${IRONCLAW_BUDGET_TENANT_ID:-reborn-cli}"
 [[ -n "$USER_ID" ]] || USER_ID="${INSTANCE_ID}-web"
 [[ -n "$BIND_PORT" ]] || { echo "ERROR: missing IRONCLAW_BIND_PORT in $ENV_FILE" >&2; exit 1; }
 
-DATABASE="${HOST_ROOT}/home/local-dev/reborn-local-dev.db"
-[[ -f "$DATABASE" ]] || { echo "ERROR: budget database not found: $DATABASE" >&2; exit 1; }
+MAIN_PID="$(systemctl show --property MainPID --value "$UNIT")"
+[[ "$MAIN_PID" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ERROR: $UNIT has no running main process" >&2
+  exit 1
+}
+INSTANCE_DB_DIR="/proc/${MAIN_PID}/root/srv/ironclaw-instance/home/local-dev"
+DATABASE="reborn-local-dev.db"
+DATABASE_DISPLAY="${HOST_ROOT}/home/local-dev/${DATABASE}"
+cd "$INSTANCE_DB_DIR" || {
+  echo "ERROR: cannot enter instance database directory through $INSTANCE_DB_DIR" >&2
+  exit 1
+}
+[[ -f "$DATABASE" ]] || { echo "ERROR: budget database not found: $DATABASE_DISPLAY" >&2; exit 1; }
 
 budget_command() {
   "$BINARY" budget "$@" --database "$DATABASE" --tenant "$TENANT_ID" --user "$USER_ID"
@@ -72,9 +78,9 @@ case "$ACTION" in
       exit 1
     }
 
-
     TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
     BACKUP="${DATABASE}.bak-budget-reset-${TIMESTAMP}"
+    BACKUP_DISPLAY="${DATABASE_DISPLAY}.bak-budget-reset-${TIMESTAMP}"
     OWNER="$(stat -c '%u:%g' "$DATABASE")"
     MODE="$(stat -c '%a' "$DATABASE")"
 
@@ -121,7 +127,7 @@ case "$ACTION" in
       exit 1
     }
     BACKUP_READY=1
-    echo "Backup: $BACKUP"
+    echo "Backup: $BACKUP_DISPLAY"
 
     MUTATED=1
     budget_command reset-period --confirm-reset
@@ -158,7 +164,7 @@ case "$ACTION" in
     MUTATED=0
     trap - EXIT
     echo "Reset complete: $UNIT is stable and healthy"
-    echo "Rollback backup retained: $BACKUP"
+    echo "Rollback backup retained: $BACKUP_DISPLAY"
     ;;
 
   *)

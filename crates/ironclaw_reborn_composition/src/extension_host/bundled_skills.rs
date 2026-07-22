@@ -63,7 +63,20 @@ struct BundledSkillMarker {
 pub(crate) async fn ensure_bundled_reborn_skills_installed(
     local_dev_storage_root: &Path,
 ) -> Result<(), RebornBuildError> {
-    let bundled_skills = embedded_reborn_skill_bundles()?;
+    // Env opt-out: IRONCLAW_REBORN_DISABLE_BUNDLED_SKILLS=1 makes a managed
+    // single-purpose instance expose ONLY its operator skills. With it set,
+    // `bundled_skills` is empty, so nothing is installed AND
+    // remove_stale_managed_skills below removes every marker-owned bundled skill
+    // previously written to /projects/system/skills (operator-owned skills, which
+    // have no managed marker, are preserved). See LOCAL_PATCHES.md.
+    let bundled_disabled = std::env::var("IRONCLAW_REBORN_DISABLE_BUNDLED_SKILLS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let bundled_skills = if bundled_disabled {
+        Vec::new()
+    } else {
+        embedded_reborn_skill_bundles()?
+    };
     let filesystem = local_dev_storage_filesystem(local_dev_storage_root)?;
     let system_skills_root = system_skills_root_path()?;
     create_dir_all(&filesystem, &system_skills_root).await?;

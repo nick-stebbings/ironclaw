@@ -100,7 +100,7 @@ _Last rebased onto `origin/main` on **2026-07-16** (upstream tip `7ae6c411b`)._
     instance exposes ONLY its filesystem skills. Without it those ~31 bundled
     skills always load and can win activation over the managed skills (e.g.
     `commitment-triage` hijacked "plan weekly content" from `content-weekly-plan-now`).
-    `registry.rs` load step 4. Requires the var in the instance `.env` + launcher
+    `ironclaw_reborn_composition/extension_host/bundled_skills.rs::ensure_bundled_reborn_skills_installed` (the loader reborn actually uses — it writes the bundle into /projects/system/skills every boot; the ironclaw_skills registry path is NOT it). Requires the var in the instance `.env` + launcher
     `env -i` allowlist.
 
 ## Retired / notes

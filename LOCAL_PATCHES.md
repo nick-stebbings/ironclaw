@@ -54,6 +54,7 @@ content drifted and needs a read. Then verify each env-gated patch is *active*:
 | #1 feature flags | _(build-time)_ `--features webui-v2-beta,postgres` | `ironclaw-reborn serve --help` exists; instance boots WebChat |
 | #2 private-IP egress | `IRONCLAW_REBORN_EXTENSION_ALLOW_PRIVATE_EGRESS=1` | any tailnet shim (notion/google/vane on 100.x) is reachable, not `error_kind="network"` |
 | #3 non-gsuite google requesters | `IRONCLAW_REBORN_GOOGLE_ACCOUNT_EXTRA_REQUESTERS=google-rest` | `google-rest` Sheets/Drive call resolves a token — NOT `x-google-token header missing` |
+| #12 disable bundled skills | `IRONCLAW_REBORN_DISABLE_BUNDLED_SKILLS=1` | activation `candidate_count` = the instance's managed skill count only (e.g. 12), NOT ~33; `commitment-triage`/`ceo-setup`/etc. never activate |
 | #6 cost telemetry / #11 OTel | `OTEL_EXPORTER_OTLP_ENDPOINT`, `:9559` exporter | spans arrive at the collector |
 
 Repo source of truth for the instance env is `ops-library
@@ -91,6 +92,16 @@ _Last rebased onto `origin/main` on **2026-07-16** (upstream tip `7ae6c411b`)._
 12. **Propagate W3C `traceparent` to MCP shim calls** (Tier 2) — `ironclaw_mcp` injects the current span trace-context into outbound MCP headers (post-plan, like the session header); `reborn_cli` init_tracing registers the `TraceContextPropagator`. Shim spans join the IronClaw trace in Tempo end-to-end (turn -> tool -> shim). No-op when OTLP is off.
 13. **Structured JSON logs for `reborn serve`** — the stderr `fmt` layer now emits newline-delimited JSON (`.json().flatten_event(true).with_current_span(true)`) instead of pretty text, so Loki/Promtail ingest fields (target, span, level, msg, trace_id) as parsed labels rather than one opaque string. `tracing-subscriber` gains the `json` feature. Pretty console output is unchanged for interactive TTY use elsewhere.
 14. **Interactive resource-budget window → 512/1024 (fixes the `gate:budget` approval loop)** — the `interactive_standard` budget lived in TWO copies: `ironclaw_turns/src/run_profile/resolver.rs` `interactive_profile()` (used for FRESH runs) and `.../snapshot.rs` `ResolvedRunProfile` (the copy **deserialized when a run resumes from its checkpoint**). Upstream's `BudgetApprovalRequired` gate (see Retired notes) raises `gate:budget-*` when the window is spent; because every WebUI **Approve resumes** the run, it reloaded the *snapshot* copy — still `max_model_calls: 32` — and re-gated on the very next step, forever. The `200 OK` from `POST /…/gates/{gate_ref}/resolve` never cleared it. Fix: set BOTH copies to `max_model_calls: 512 / max_capability_invocations: 1024` so a normal interactive turn finishes in one window. **If this recurs after a rebase: verify BOTH files still carry 512 — raising only `resolver.rs` does nothing because the resume path reads `snapshot.rs`.** (Diagnosed 2026-07-21 after a long chase past false fs-wedge / model / read-gate leads; symptom was "Approval Required" that re-appeared on every Approve.)
+
+12. **Env opt-out for bundled skills** — `IRONCLAW_REBORN_DISABLE_BUNDLED_SKILLS=1`
+    skips the upstream founder-OS bundle (`skills/` embedded by
+    `ironclaw_reborn_composition/build.rs`: commitment-triage, ceo-setup,
+    trader-setup, delegation, idea-parking, ...) so a managed single-purpose
+    instance exposes ONLY its filesystem skills. Without it those ~31 bundled
+    skills always load and can win activation over the managed skills (e.g.
+    `commitment-triage` hijacked "plan weekly content" from `content-weekly-plan-now`).
+    `registry.rs` load step 4. Requires the var in the instance `.env` + launcher
+    `env -i` allowlist.
 
 ## Retired / notes
 

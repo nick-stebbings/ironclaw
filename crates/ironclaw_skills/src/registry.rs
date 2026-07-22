@@ -395,8 +395,15 @@ impl SkillRegistry {
             self.absorb(skills, &mut seen, &mut loaded_names, "installed");
         }
 
-        // 4. Bundled skills (compiled into binary, lowest priority)
-        if !self.bundled_content.is_empty() {
+        // 4. Bundled skills (compiled into binary, lowest priority).
+        // Env opt-out: IRONCLAW_REBORN_DISABLE_BUNDLED_SKILLS=1 skips the upstream
+        // founder-OS bundle (commitment-triage, ceo-setup, trader-setup, ...) so a
+        // managed single-purpose instance exposes ONLY its filesystem skills and the
+        // bundle can't shadow them at activation (see LOCAL_PATCHES.md).
+        let bundled_disabled = std::env::var("IRONCLAW_REBORN_DISABLE_BUNDLED_SKILLS")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !self.bundled_content.is_empty() && !bundled_disabled {
             let bundled = self.load_bundled_skills(&seen).await;
             for (name, skill) in bundled {
                 seen.insert(name.clone());

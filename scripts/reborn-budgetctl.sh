@@ -49,12 +49,13 @@ TENANT_ID="${IRONCLAW_BUDGET_TENANT_ID:-reborn-cli}"
 [[ -n "$BIND_PORT" ]] || { echo "ERROR: missing IRONCLAW_BIND_PORT in instance environment" >&2; exit 1; }
 
 INSTANCE_DB_DIR="/proc/${MAIN_PID}/root/srv/ironclaw-instance/home/local-dev"
-DATABASE="reborn-local-dev.db"
-DATABASE_DISPLAY="${HOST_ROOT}/home/local-dev/${DATABASE}"
+DATABASE_NAME="reborn-local-dev.db"
 cd "$INSTANCE_DB_DIR" || {
-  echo "ERROR: cannot enter instance database directory through $INSTANCE_DB_DIR" >&2
+  echo "ERROR: cannot hold instance database directory: $INSTANCE_DB_DIR" >&2
   exit 1
 }
+DATABASE="/proc/$$/cwd/${DATABASE_NAME}"
+DATABASE_DISPLAY="${HOST_ROOT}/home/local-dev/${DATABASE_NAME}"
 [[ -f "$DATABASE" ]] || { echo "ERROR: budget database not found: $DATABASE_DISPLAY" >&2; exit 1; }
 
 budget_command() {

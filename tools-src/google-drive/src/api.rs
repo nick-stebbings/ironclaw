@@ -4,6 +4,8 @@
 //! credential injection and rate limiting. The WASM tool never sees
 //! the actual OAuth token.
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
 use crate::near::agent::host;
 use crate::types::*;
 
@@ -175,6 +177,7 @@ pub fn get_file(file_id: &str) -> Result<FileResult, String> {
 pub fn download_file(
     file_id: &str,
     export_mime_type: Option<&str>,
+    binary: bool,
 ) -> Result<DownloadResult, String> {
     // First get metadata to know the file type and name
     let meta = get_file(file_id)?;
@@ -202,23 +205,54 @@ pub fn download_file(
         api_call_raw("GET", &url)?
     };
 
-    let content = String::from_utf8(bytes).map_err(|_| {
-        "File content is binary, cannot display as text. Use get_file for metadata only."
-            .to_string()
-    })?;
+    let byte_len = bytes.len();
+
+    // Binary path: requested explicitly, or the body simply is not UTF-8.
+    // Auto-detection matters because callers do not always know the MIME type
+    // ahead of time, and the old behaviour (hard error) made binary files
+    // unreachable through this tool at all.
+    if binary {
+        return Ok(DownloadResult {
+            file_id: file_id.to_string(),
+            name: meta.file.name,
+            mime_type: meta.file.mime_type,
+            content: String::new(),
+            content_base64: Some(B64.encode(&bytes)),
+            encoding: "base64".to_string(),
+            bytes: byte_len,
+        });
+    }
+
+    let content = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) => {
+            return Ok(DownloadResult {
+                file_id: file_id.to_string(),
+                name: meta.file.name,
+                mime_type: meta.file.mime_type,
+                content: String::new(),
+                content_base64: Some(B64.encode(e.as_bytes())),
+                encoding: "base64".to_string(),
+                bytes: byte_len,
+            });
+        }
+    };
 
     Ok(DownloadResult {
         file_id: file_id.to_string(),
         name: meta.file.name,
         mime_type: meta.file.mime_type,
         content,
+        content_base64: None,
+        encoding: "utf8".to_string(),
+        bytes: byte_len,
     })
 }
 
 /// Upload a text file using multipart upload.
 pub fn upload_file(
     name: &str,
-    content: &str,
+    content: &[u8],
     mime_type: &str,
     parent_id: Option<&str>,
     description: Option<&str>,
@@ -238,15 +272,16 @@ pub fn upload_file(
 
     let metadata_str = serde_json::to_string(&metadata).map_err(|e| e.to_string())?;
 
-    // Build multipart body
-    let mut body = String::new();
-    body.push_str(&format!("--{}\r\n", boundary));
-    body.push_str("Content-Type: application/json; charset=UTF-8\r\n\r\n");
-    body.push_str(&metadata_str);
-    body.push_str(&format!("\r\n--{}\r\n", boundary));
-    body.push_str(&format!("Content-Type: {}\r\n\r\n", mime_type));
-    body.push_str(content);
-    body.push_str(&format!("\r\n--{}--", boundary));
+    // Build the multipart body as BYTES. It used to be a String, which meant
+    // any non-UTF-8 payload (audio, video, images) could not be uploaded at all.
+    let mut body: Vec<u8> = Vec::with_capacity(content.len() + 512);
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
+    body.extend_from_slice(metadata_str.as_bytes());
+    body.extend_from_slice(format!("\r\n--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", mime_type).as_bytes());
+    body.extend_from_slice(content);
+    body.extend_from_slice(format!("\r\n--{}--", boundary).as_bytes());
 
     let url = format!(
         "{}/files?uploadType=multipart&fields={}&supportsAllDrives=true",
@@ -262,7 +297,7 @@ pub fn upload_file(
         "Drive API: POST upload/files (multipart)",
     );
 
-    let response = host::http_request("POST", &url, &headers, Some(body.as_bytes()), None)?;
+    let response = host::http_request("POST", &url, &headers, Some(&body), None)?;
 
     if response.status < 200 || response.status >= 300 {
         let body_text = String::from_utf8_lossy(&response.body);

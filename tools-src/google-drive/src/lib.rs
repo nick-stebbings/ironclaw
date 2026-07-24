@@ -37,6 +37,8 @@
 mod api;
 mod types;
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
 use types::GoogleDriveAction;
 
 wit_bindgen::generate!({
@@ -128,21 +130,42 @@ fn execute_inner(params: &str) -> Result<String, String> {
         GoogleDriveAction::DownloadFile {
             file_id,
             export_mime_type,
+            binary,
         } => {
-            let result = api::download_file(&file_id, export_mime_type.as_deref())?;
+            let result = api::download_file(&file_id, export_mime_type.as_deref(), binary)?;
             serde_json::to_string(&result).map_err(|e| e.to_string())?
         }
 
         GoogleDriveAction::UploadFile {
             name,
             content,
+            content_base64,
             mime_type,
             parent_id,
             description,
         } => {
+            // Exactly one content form. Silently preferring one over the other
+            // would upload the wrong bytes; better to reject the call.
+            let bytes: Vec<u8> = match (content, content_base64) {
+                (Some(_), Some(_)) => {
+                    return Err(
+                        "provide either 'content' or 'content_base64', not both".to_string()
+                    )
+                }
+                (Some(text), None) => text.into_bytes(),
+                (None, Some(b64)) => B64
+                    .decode(b64.trim())
+                    .map_err(|e| format!("content_base64 is not valid base64: {e}"))?,
+                (None, None) => {
+                    return Err(
+                        "missing file content: provide 'content' (text) or 'content_base64' (binary)"
+                            .to_string(),
+                    )
+                }
+            };
             let result = api::upload_file(
                 &name,
-                &content,
+                &bytes,
                 &mime_type,
                 parent_id.as_deref(),
                 description.as_deref(),

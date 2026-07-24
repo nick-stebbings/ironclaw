@@ -1,25 +1,37 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "wit_version": "0.3.0",
-  "description": "Search, access, upload, share, and organize files and folders in Google Drive, including finding Google Sheets/spreadsheets, Docs, and Slides by name or title. Supports personal drives and shared (organizational) drives.",
+  "description": "Search, access, upload, share, and organize files and folders in Google Drive, including finding Google Sheets/spreadsheets, Docs, and Slides by name or title. Supports personal drives and shared (organizational) drives. Supports binary download/upload (audio, video, images) via base64.",
   "http": {
     "allowlist": [
       {
         "host": "www.googleapis.com",
         "path_prefix": "/drive/v3/",
-        "methods": ["GET", "POST", "PATCH", "DELETE"]
+        "methods": [
+          "GET",
+          "POST",
+          "PATCH",
+          "DELETE"
+        ]
       },
       {
         "host": "www.googleapis.com",
         "path_prefix": "/upload/drive/v3/",
-        "methods": ["POST", "PUT"]
+        "methods": [
+          "POST",
+          "PUT"
+        ]
       }
     ],
     "credentials": {
       "google_oauth_token": {
         "secret_name": "google_oauth_token",
-        "location": { "type": "bearer" },
-        "host_patterns": ["www.googleapis.com"]
+        "location": {
+          "type": "bearer"
+        },
+        "host_patterns": [
+          "www.googleapis.com"
+        ]
       }
     },
     "rate_limit": {
@@ -29,7 +41,9 @@
     "timeout_secs": 60
   },
   "secrets": {
-    "allowed_names": ["google_oauth_token"]
+    "allowed_names": [
+      "google_oauth_token"
+    ]
   },
   "auth": {
     "secret_name": "google_oauth_token",

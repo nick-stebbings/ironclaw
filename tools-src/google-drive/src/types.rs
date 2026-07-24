@@ -45,9 +45,10 @@ pub enum GoogleDriveAction {
         file_id: String,
     },
 
-    /// Download file content as text.
-    /// Only works for text-based files. For Google Docs/Sheets/Slides,
-    /// exports as plain text / CSV / plain text respectively.
+    /// Download file content. Text by default; set `binary: true` for
+    /// non-text files (audio, video, images), which returns base64 in
+    /// `content_base64` instead of `content`.
+    /// For Google Docs/Sheets/Slides, exports as plain text / CSV / plain text.
     DownloadFile {
         /// The file ID.
         file_id: String,
@@ -56,14 +57,24 @@ pub enum GoogleDriveAction {
         /// Slides -> "text/plain", Drawings -> "image/svg+xml".
         #[serde(default)]
         export_mime_type: Option<String>,
+        /// Return base64 in `content_base64` instead of failing on non-UTF-8.
+        /// Required for binary files. Binary content is also auto-detected:
+        /// a non-UTF-8 body returns base64 rather than an error.
+        #[serde(default)]
+        binary: bool,
     },
 
-    /// Upload a new file (text content).
+    /// Upload a new file. Provide exactly one of `content` (text) or
+    /// `content_base64` (binary: audio, video, images).
     UploadFile {
         /// File name.
         name: String,
-        /// File content (text).
-        content: String,
+        /// File content (text). Omit when using `content_base64`.
+        #[serde(default)]
+        content: Option<String>,
+        /// File content as base64 (binary). Omit when using `content`.
+        #[serde(default)]
+        content_base64: Option<String>,
         /// MIME type (default: "text/plain").
         #[serde(default = "default_mime_type")]
         mime_type: String,
@@ -246,7 +257,15 @@ pub struct DownloadResult {
     pub file_id: String,
     pub name: String,
     pub mime_type: String,
+    /// Text content. Empty when the payload was binary.
     pub content: String,
+    /// Base64 payload, set when the file is binary (requested or detected).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_base64: Option<String>,
+    /// "utf8" or "base64" -- lets a caller branch without guessing.
+    pub encoding: String,
+    /// Decoded byte length, so a caller can sanity-check size before decoding.
+    pub bytes: usize,
 }
 
 /// Result from delete/trash.
@@ -380,5 +399,79 @@ mod tests {
             required, ["action"],
             "list_files should require only the discriminator"
         );
+    }
+
+    /// Binary Drive payloads (the Loom pipeline's MP3 in / WebM out) could not
+    /// previously travel through this tool at all: download hard-errored on
+    /// non-UTF-8 and upload built its multipart body as a String. These pin the
+    /// binary contract.
+    #[test]
+    fn upload_accepts_text_content_as_before() {
+        // Backwards compatibility: `content` became Option<String>, so every
+        // existing text caller must still deserialize unchanged.
+        let v: GoogleDriveAction = serde_json::from_str(
+            r#"{"action":"upload_file","name":"a.txt","content":"hello"}"#,
+        )
+        .expect("legacy text upload must still parse");
+        match v {
+            GoogleDriveAction::UploadFile {
+                content,
+                content_base64,
+                ..
+            } => {
+                assert_eq!(content.as_deref(), Some("hello"));
+                assert!(content_base64.is_none());
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn upload_accepts_base64_content() {
+        let v: GoogleDriveAction = serde_json::from_str(
+            r#"{"action":"upload_file","name":"a.webm","content_base64":"AAEC","mime_type":"video/webm"}"#,
+        )
+        .expect("binary upload must parse");
+        match v {
+            GoogleDriveAction::UploadFile {
+                content,
+                content_base64,
+                mime_type,
+                ..
+            } => {
+                assert!(content.is_none());
+                assert_eq!(content_base64.as_deref(), Some("AAEC"));
+                assert_eq!(mime_type, "video/webm");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn download_binary_flag_defaults_false_and_parses() {
+        let plain: GoogleDriveAction =
+            serde_json::from_str(r#"{"action":"download_file","file_id":"x"}"#).unwrap();
+        match plain {
+            GoogleDriveAction::DownloadFile { binary, .. } => {
+                assert!(!binary, "binary must default false so text callers are unaffected")
+            }
+            _ => panic!("wrong variant"),
+        }
+        let bin: GoogleDriveAction =
+            serde_json::from_str(r#"{"action":"download_file","file_id":"x","binary":true}"#)
+                .unwrap();
+        match bin {
+            GoogleDriveAction::DownloadFile { binary, .. } => assert!(binary),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    /// The schema is what the agent reads; if these fields are absent it will
+    /// never emit them and binary files stay unreachable.
+    #[test]
+    fn schema_advertises_the_binary_fields() {
+        let schema = serde_json::to_string(&schemars::schema_for!(GoogleDriveAction)).unwrap();
+        assert!(schema.contains("content_base64"), "schema must expose content_base64");
+        assert!(schema.contains("binary"), "schema must expose the binary flag");
     }
 }

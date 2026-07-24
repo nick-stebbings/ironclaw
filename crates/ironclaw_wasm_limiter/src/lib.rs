@@ -96,7 +96,7 @@ impl ResourceLimiter for WasmResourceLimiter {
         desired: usize,
         _maximum: Option<usize>,
     ) -> Result<bool, wasmtime::Error> {
-        if desired > 10_000 {
+        if desired > 16_384 { // local-patch: raise WASM table cap for large-library tools (loom-render ffmpeg ~10269 elems)
             tracing::warn!(current, desired, "WASM table growth denied");
             return Ok(false);
         }

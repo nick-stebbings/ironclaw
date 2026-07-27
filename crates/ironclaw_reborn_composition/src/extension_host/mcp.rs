@@ -139,7 +139,14 @@ impl HostedMcpEndpoint {
 }
 
 pub(crate) fn hosted_http_mcp_endpoint(package: &ExtensionPackage) -> Option<HostedMcpEndpoint> {
-    if package.manifest.source != ManifestSource::HostBundled {
+    // local: allow operator-installed (InstalledLocal) hosted-MCP shims to receive
+    // product-auth credential injection, not just binary-compiled HostBundled ones.
+    // Our first-party shims (notion-rest, google-rest, ...) are installed on the
+    // filesystem under /system/extensions and are ALWAYS classified InstalledLocal
+    // by the loader (ManifestSource is loader-supplied, never from TOML/state.json),
+    // so upstream's HostBundled-only gate permanently withheld their tokens.
+    // Injection stays gated per-request by the manifest audience (allows_target).
+    if !matches!(package.manifest.source, ManifestSource::HostBundled | ManifestSource::InstalledLocal) {
         return None;
     }
     let ExtensionRuntime::Mcp {

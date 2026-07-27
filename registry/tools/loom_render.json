@@ -1,0 +1,22 @@
+{
+  "name": "loom_render",
+  "display_name": "Loom Render",
+  "kind": "tool",
+  "version": "0.2.0",
+  "wit_version": "0.3.0",
+  "description": "Compose a personalized Loom-style video (WebM VP9+Opus) from a website screenshot and a Drive-hosted intro audio track; upload the result to Drive. Stage 2 of the Loom outreach pipeline.",
+  "keywords": ["video", "loom", "outreach", "screenshot", "ffmpeg"],
+  "source": {
+    "dir": "tools-src/loom-render",
+    "capabilities": "loom-render-tool.capabilities.json",
+    "crate_name": "loom-render-tool"
+  },
+  "auth_summary": {
+    "method": "oauth",
+    "provider": "Google",
+    "secrets": ["google_oauth_token"],
+    "shared_auth": "google_oauth_token",
+    "setup_url": "https://console.cloud.google.com/apis/credentials"
+  },
+  "tags": ["loom", "video"]
+}

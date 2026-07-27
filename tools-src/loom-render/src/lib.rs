@@ -35,6 +35,10 @@ struct LoomRenderTool;
 /// Screenshot service host. Must match the single entry in the tool's
 /// `capabilities.json` http allowlist -- the host rejects anything else.
 const SCREENSHOT_HOST: &str = "loom-capture.internal";
+// Plain-HTTP backend port (8939). NOT the :443 tailscale-serve HTTPS front: that
+// cert is for *.ts.net and fails TLS verify for loom-capture.internal. Tailnet is
+// WireGuard-encrypted and /screenshot is unauthenticated, so plain HTTP is fine.
+const SCREENSHOT_PORT: u16 = 8939;
 
 const DEFAULT_FPS: u32 = 25;
 const MAX_DURATION_SEC: f64 = 120.0;
@@ -153,7 +157,7 @@ fn capture_website(url: &str, width: u32, height: u32) -> Result<Vec<u8>, String
     let body = serde_json::json!({ "url": url, "width": width, "height": height });
     let response = host::http_request(
         "POST",
-        &format!("https://{SCREENSHOT_HOST}/screenshot"),
+        &format!("http://{SCREENSHOT_HOST}:{SCREENSHOT_PORT}/screenshot"),
         r#"{"content-type":"application/json"}"#,
         Some(body.to_string().as_bytes()),
         Some(60_000),

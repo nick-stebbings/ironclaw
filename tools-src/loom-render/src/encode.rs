@@ -26,7 +26,10 @@ use crate::render::{Compose, Composed, EncoderAvailability, Triple};
 
 // errno sentinels ffmpeg returns; both are stable values, hardcoded to avoid the
 // macro/const ambiguity across the per-module bindings.
-const AVERROR_EAGAIN: c_int = -11; // -EAGAIN
+// NOTE: EAGAIN is 6 on wasm32-wasi (not 11 as on Linux), so ffmpeg returns
+// AVERROR(EAGAIN) = -6. Using -11 mis-reads the encoder's normal "need more
+// input" as fatal and every encode drain dies with -6.
+const AVERROR_EAGAIN: c_int = -6; // -EAGAIN (wasi errno)
 const AVERROR_EOF_VAL: c_int = -541_478_725; // FFERRTAG('E','O','F',' ')
 
 const PIX_YUV420P: AVPixelFormat = AVPixelFormat_AV_PIX_FMT_YUV420P;
@@ -184,6 +187,7 @@ unsafe fn encode_inner(input: &Compose<'_>, triple: Triple) -> Result<Composed, 
     (*vctx).framerate = AVRational { num: fps, den: 1 };
     (*vctx).gop_size = fps; // one keyframe per second
     (*vctx).bit_rate = (width as i64 * height as i64) / 2; // a still needs little
+    (*vctx).thread_count = 1; // wasm has no threads
 
     if avcodec_open2(vctx, venc, ptr::null_mut()) < 0 {
         return Err(format!("could not open {} encoder", triple.video));

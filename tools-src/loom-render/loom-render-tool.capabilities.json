@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "wit_version": "0.3.0",
   "description": "Compose a personalized Loom-style video from a Drive-hosted intro audio track and a screenshot of the lead's website; upload the result to Drive. Stage 2 of the Loom outreach pipeline: consumes the audio produced by personalized-loom-outreach-poc and returns video_drive_file_id.",
   "discovery_summary": {
@@ -10,8 +10,8 @@
     ],
     "notes": [
       "Stage 2 of the Loom outreach pipeline; consumes the audio produced by personalized-loom-outreach-poc.",
-      "Drive I/O goes through the google-drive tool (tool_invoke), so this tool never holds a Google OAuth token and its egress stays limited to the screenshot host.",
-      "Requires google-drive-tool v0.3.0+, which added binary (base64) download/upload."
+      "Drive I/O is direct HTTP to the Google Drive REST API; the host injects the tenant Google OAuth token (http.credentials), the same way the google-drive tool authenticates. tool-invoke is a deny-all stub in the runtime.",
+      "The screenshot service MUST return JPEG -- the bundled ffmpeg has no PNG decoder."
     ]
   },
   "http": {
@@ -20,15 +20,31 @@
         "host": "loom-capture.internal",
         "path_prefix": "/screenshot",
         "methods": ["POST"]
+      },
+      {
+        "host": "www.googleapis.com",
+        "path_prefix": "/drive/v3/",
+        "methods": ["GET"]
+      },
+      {
+        "host": "www.googleapis.com",
+        "path_prefix": "/upload/drive/v3/",
+        "methods": ["POST"]
       }
-    ]
-  },
-  "tool_invoke": {
-    "aliases": {
-      "google-drive": "google-drive"
+    ],
+    "credentials": {
+      "google_oauth_token": {
+        "secret_name": "google_oauth_token",
+        "location": { "type": "bearer" },
+        "host_patterns": ["www.googleapis.com"]
+      }
     }
   },
   "secrets": {
-    "allowed_names": ["loom_screenshot_api_key"]
+    "allowed_names": ["loom_screenshot_api_key", "google_oauth_token"]
+  },
+  "auth": {
+    "secret_name": "google_oauth_token",
+    "display_name": "Google"
   }
 }

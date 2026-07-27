@@ -22,7 +22,8 @@ use std::ptr;
 
 use ffmpeg_wasi::avcodec::*;
 
-const AVERROR_EAGAIN: c_int = -11;
+// EAGAIN is 6 on wasm32-wasi (not 11 as on Linux); ffmpeg returns -6 here.
+const AVERROR_EAGAIN: c_int = -6;
 const AVERROR_EOF_VAL: c_int = -541_478_725;
 const FLTP: AVSampleFormat = AVSampleFormat_AV_SAMPLE_FMT_FLTP;
 const MP3_ID: AVCodecID = AVCodecID_AV_CODEC_ID_MP3;
@@ -96,6 +97,22 @@ pub unsafe fn decode_mp3(bytes: &[u8]) -> Result<DecodedAudio, String> {
         return Err("av_packet_alloc (mp3) returned null".into());
     }
     let _pkt = PktGuard(pkt);
+    // Strip a leading ID3v2 tag so the raw MP3 decoder sees frame sync.
+    // ElevenLabs / ffmpeg-muxed MP3s carry one; feeding it to send_packet fails.
+    fn strip_id3v2(b: &[u8]) -> &[u8] {
+        if b.len() >= 10 && &b[0..3] == b"ID3" {
+            let size = ((b[6] as usize & 0x7f) << 21)
+                | ((b[7] as usize & 0x7f) << 14)
+                | ((b[8] as usize & 0x7f) << 7)
+                | (b[9] as usize & 0x7f);
+            let total = 10 + size;
+            if total < b.len() {
+                return &b[total..];
+            }
+        }
+        b
+    }
+    let bytes = strip_id3v2(bytes);
     (*pkt).data = bytes.as_ptr() as *mut u8;
     (*pkt).size = bytes.len() as c_int;
 
@@ -215,8 +232,9 @@ pub unsafe fn open_audio_encoder(
         // WebM/MP4 want extradata in the header, not inline.
         (*ctx).flags |= AV_CODEC_FLAG_GLOBAL_HEADER as c_int;
     }
-    // Native Opus is flagged experimental in ffmpeg; without this it refuses.
-    if plan.codec_name == "opus" {
+    // Native Opus AND Vorbis are both flagged experimental in ffmpeg; without
+    // this they refuse to open. (Vorbis is the non-48k path, e.g. 44.1k MP3s.)
+    if plan.codec_name == "opus" || plan.codec_name == "vorbis" {
         (*ctx).strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
     }
 

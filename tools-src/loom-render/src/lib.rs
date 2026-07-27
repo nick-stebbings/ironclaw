@@ -12,17 +12,17 @@
 //!     response (a base64 video in the tool output would blow the model's
 //!     context).
 //!
-//! Drive I/O goes through `tool-invoke` to the `google-drive` tool rather than
-//! direct HTTP, so this tool never handles a Google OAuth token and its own
-//! egress allowlist stays limited to the screenshot host.
+//! Drive I/O is direct HTTP to the Google Drive REST API; the tenant's Google
+//! OAuth token is injected by the host runtime for `www.googleapis.com`
+//! (declared in `capabilities.json` `http.credentials`), the same mechanism the
+//! `google-drive` tool uses. (The `tool-invoke` path it used before is a
+//! deny-all stub in the live runtime — no wasm tool→tool dispatch exists.)
 
 wit_bindgen::generate!({
     world: "sandboxed-tool",
     path: "../../wit/tool.wit",
 });
 
-use base64::engine::general_purpose::STANDARD as B64;
-use base64::Engine as _;
 use near::agent::host;
 use serde::Deserialize;
 
@@ -128,46 +128,23 @@ impl Params {
     }
 }
 
-/// Call another tool through the host and parse its JSON reply.
-fn invoke_tool(alias: &str, params: &serde_json::Value) -> Result<serde_json::Value, String> {
-    let raw = host::tool_invoke(alias, &params.to_string())
-        .map_err(|e| format!("{alias} invocation failed: {e}"))?;
-    serde_json::from_str(&raw).map_err(|e| format!("{alias} returned unparseable JSON: {e}"))
-}
-
-/// Download the stage-1 audio as raw bytes.
+/// Download the stage-1 audio bytes from Google Drive over HTTP.
 ///
-/// `binary: true` is what makes this work at all: google-drive's `download_file`
-/// used to hard-error on any non-UTF-8 body, which is every MP3 ever made.
-/// Added in google-drive-tool v0.3.0.
+/// The tenant's Google OAuth token is injected as `Authorization: Bearer …` by
+/// the host runtime for `www.googleapis.com` (declared in `capabilities.json`
+/// `http.credentials`); the tool must NOT set the header itself. `alt=media`
+/// returns the raw file body (the MP3), not metadata.
 fn fetch_audio(file_id: &str) -> Result<Vec<u8>, String> {
-    let reply = invoke_tool(
-        "google-drive",
-        &serde_json::json!({
-            "action": "download_file",
-            "file_id": file_id,
-            "binary": true
-        }),
-    )?;
-
-    let b64 = reply
-        .get("content_base64")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            format!(
-                "google-drive returned no content_base64 for {file_id} (encoding={:?}); \
-                 the tool must be v0.3.0 or later",
-                reply.get("encoding").and_then(|v| v.as_str())
-            )
-        })?;
-
-    let bytes = B64
-        .decode(b64.trim())
-        .map_err(|e| format!("audio content_base64 was not valid base64: {e}"))?;
-    if bytes.is_empty() {
+    let url = format!("https://www.googleapis.com/drive/v3/files/{file_id}?alt=media");
+    let response = host::http_request("GET", &url, "{}", None, Some(60_000))
+        .map_err(|e| format!("drive download request failed: {e}"))?;
+    if response.status < 200 || response.status >= 300 {
+        return Err(format!("drive download returned status {}", response.status));
+    }
+    if response.body.is_empty() {
         return Err(format!("audio file {file_id} is empty"));
     }
-    Ok(bytes)
+    Ok(response.body)
 }
 
 /// Capture the lead's website. Out of sandbox by necessity — there is no browser
@@ -195,31 +172,48 @@ fn capture_website(url: &str, width: u32, height: u32) -> Result<Vec<u8>, String
     Ok(response.body)
 }
 
-/// Upload the rendered video and return its Drive file id.
+/// Upload the rendered video to Google Drive over HTTP (multipart) and return
+/// its file id. Auth is injected by the host for `www.googleapis.com`.
 fn upload_video(
     folder_id: &str,
     name: &str,
     bytes: &[u8],
     mime: &str,
 ) -> Result<String, String> {
-    let reply = invoke_tool(
-        "google-drive",
-        &serde_json::json!({
-            "action": "upload_file",
-            "name": name,
-            "content_base64": B64.encode(bytes),
-            "mime_type": mime,
-            "parent_id": folder_id
-        }),
-    )?;
+    const BOUNDARY: &str = "loomrenderQ8x2Zt7pboundary";
+    let metadata = serde_json::json!({ "name": name, "parents": [folder_id] }).to_string();
 
+    let mut body: Vec<u8> = Vec::with_capacity(bytes.len() + metadata.len() + 256);
+    body.extend_from_slice(
+        format!(
+            "--{BOUNDARY}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{metadata}\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(format!("--{BOUNDARY}\r\nContent-Type: {mime}\r\n\r\n").as_bytes());
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
+
+    let headers = format!(r#"{{"content-type":"multipart/related; boundary={BOUNDARY}"}}"#);
+    let response = host::http_request(
+        "POST",
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
+        &headers,
+        Some(&body),
+        Some(120_000),
+    )
+    .map_err(|e| format!("drive upload request failed: {e}"))?;
+    if response.status < 200 || response.status >= 300 {
+        return Err(format!("drive upload returned status {}", response.status));
+    }
+
+    let reply: serde_json::Value = serde_json::from_slice(&response.body)
+        .map_err(|e| format!("drive upload returned unparseable JSON: {e}"))?;
     reply
-        .get("file")
-        .and_then(|f| f.get("id"))
-        .or_else(|| reply.get("id"))
+        .get("id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| "google-drive upload returned no file id".to_string())
+        .ok_or_else(|| "drive upload returned no file id".to_string())
 }
 
 fn execute_inner(params_json: &str) -> Result<String, String> {

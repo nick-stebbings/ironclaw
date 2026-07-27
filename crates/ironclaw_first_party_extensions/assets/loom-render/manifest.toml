@@ -1,0 +1,33 @@
+schema_version = "reborn.extension_manifest.v2"
+id = "loom-render"
+name = "Loom Render"
+version = "0.2.0"
+description = "Compose a personalized Loom-style video from a Drive-hosted intro audio track and a screenshot of the lead's website; upload the result to Drive. Stage 2 of the Loom outreach pipeline."
+trust = "third_party"
+
+[runtime]
+kind = "wasm"
+module = "wasm/loom_render_tool.wasm"
+
+[[host_api]]
+id = "ironclaw.capability_provider/v1"
+section = "capability_provider.tools"
+
+[capability_provider.tools]
+
+[[capability_provider.tools.capabilities]]
+id = "loom-render.render"
+description = "Render a personalized Loom-style video. Requires audio_drive_file_id, website_url and drive_output_folder_id; returns video_drive_file_id."
+effects = ["dispatch_capability", "network", "use_secret", "external_write"]
+# Drive I/O is direct HTTP to the Drive REST API with the tenant's Google OAuth
+# token injected by the host — the same arrangement the google-drive tool uses.
+# The capture surface (loom-capture.internal/screenshot) is tailnet-only and
+# unauthenticated by design, so it needs no credential here.
+runtime_credentials = [
+  { handle = "google_oauth_token", source = { type = "product_auth_account", provider = "google", setup = { kind = "oauth", scopes = ["https://www.googleapis.com/auth/drive"] } }, provider_scopes = ["https://www.googleapis.com/auth/drive"], audience = { scheme = "https", host_pattern = "www.googleapis.com" }, target = { type = "header", name = "authorization", prefix = "Bearer " } },
+]
+default_permission = "ask"
+visibility = "model"
+input_schema_ref = "schemas/loom-render/render.input.v1.json"
+output_schema_ref = "schemas/loom-render/raw_output.v1.json"
+required_host_ports = ["host.runtime.http_egress"]

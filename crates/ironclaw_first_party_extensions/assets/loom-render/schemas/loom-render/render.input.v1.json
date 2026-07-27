@@ -1,0 +1,24 @@
+{
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "type": "object",
+ "required": [
+  "audio_drive_file_id",
+  "website_url",
+  "drive_output_folder_id"
+ ],
+ "properties": {
+  "audio_drive_file_id": {
+   "type": "string",
+   "description": "Drive file id of the intro audio from stage 1"
+  },
+  "website_url": {
+   "type": "string",
+   "description": "Lead's website URL to screenshot"
+  },
+  "drive_output_folder_id": {
+   "type": "string",
+   "description": "Drive folder to upload the rendered video into"
+  }
+ },
+ "additionalProperties": false
+}

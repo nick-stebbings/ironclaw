@@ -105,6 +105,14 @@ _Last rebased onto `origin/main` on **2026-07-16** (upstream tip `7ae6c411b`)._
 
 15. **Native budget administration**  `ironclaw-reborn budget status|reset-period` opens an offline libSQL ledger through the filesystem governor. Reset writes one durable `reset_period` journal delta while preserving limits and active reservations. `scripts/reborn-budgetctl.sh` wraps live instance resets in stop/backup/reset/restart/health-check with automatic rollback; `/opt/ironclaw/Makefile` exposes `budget-status` and confirmation-gated `budget-reset`.
 
+16. **WASM tool table-element cap 10k→16k** (`crates/ironclaw_wasm_limiter/src/lib.rs`, `WasmResourceLimiter::table_growing`) — tools that link a large C library exceed the default 10,000-element table cap: loom-render's ffmpeg (VP9/AV1) component declares a ~10,269-element indirect-function table and otherwise fails instantiation with *"table minimum size of 10269 elements exceeds table limits."* Raised to `16_384`. **Reapply after rebase** (upstream file). Commit `ff3ac837f`. Verify: loom-render (or any ffmpeg tool) instantiates in `WitToolRuntime`.
+
+17. **WASM tool sandbox resource limits raised for video encode** (`crates/ironclaw_wasm/src/wasm_sandbox_core.rs`, `SandboxLimits` defaults) — fuel `5e8 → 1e16`, memory `10 MiB → 4 GiB`, timeout `60s → 300s`. ffmpeg video encode vastly exceeds the tool defaults (a 1s 720p VP9+Opus clip needs ~1e14 fuel — the "VP9 flush trap" was actually **fuel exhaustion**, not a codec bug). These are **global** tool defaults (no per-tool limit mechanism exists); the epoch timeout is the real wall-clock DoS bound, so fuel is set high enough not to falsely trip. **Reapply after rebase** (upstream file); per-tool limits would be the proper long-term fix. Commit `2045778d`.
+
+18. **google-drive tool: binary (base64) download/upload** (`tools-src/google-drive/`, v0.3.0) — added binary `download_file`/`upload_file`; the previous path hard-errored on any non-UTF-8 body (i.e. every MP3/MP4). **Reapply/rebase after upstream** (modifies the upstream google-drive tool). Commit `40fa49f96`. (loom-render itself now does Drive I/O directly via `http-request`, so it no longer depends on this, but the capability is still useful.)
+
+19. **loom-render tool** (`tools-src/loom-render/`, NEW — fork-owned) — Loom pipeline stage 2: composes an ffmpeg WebM (VP9 + Opus) from a website screenshot + the stage-1 intro audio, with Drive I/O over `http-request` (the deny-all `tool-invoke` path is unimplemented in the runtime). New files, so **no rebase conflict** — but it is inert without patches **#16 and #17** (table cap + resource limits), so re-verify those survived any rebase before expecting loom-render to run. Commits `5fed1ca9`, `e4f0f615`.
+
 ## Retired / notes
 
 - **Distinct `budget_approval_required` failure category** — RETIRED at the

@@ -15,9 +15,9 @@ pub trait SandboxStoreData {
 /// v1-compatible epoch tick interval used as backup timeout mechanism.
 pub const EPOCH_TICK_INTERVAL: Duration = Duration::from_millis(500);
 
-const DEFAULT_MEMORY_BYTES: u64 = 10 * 1024 * 1024;
-const DEFAULT_FUEL: u64 = 500_000_000;
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_MEMORY_BYTES: u64 = 4096 * 1024 * 1024; // local-patch: generous per-tool ceiling for video (192 GB host)
+const DEFAULT_FUEL: u64 = 10_000_000_000_000_000; // local-patch: video encode is fuel-heavy; the epoch timeout is the real wall-clock DoS bound
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300); // local-patch: allow longer encodes
 
 #[derive(Debug, Clone)]
 pub struct SandboxLimits {

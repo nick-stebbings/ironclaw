@@ -193,13 +193,14 @@ microservices — but not a silver bullet. Document the trade honestly.
 3. **`loom-render` reaches this as `https://loom-capture.internal/screenshot`** (hardcoded
    `SCREENSHOT_HOST`, per its capabilities allowlist). **This name must resolve to the capture
    endpoint** or stage 2 fails with a bare connection error, not anything descriptive.
-   ⚠️ **Currently BROKEN: `loom-capture.internal` does not resolve** (not in `/etc/hosts`, no DNS).
-   Fix before stage-2 e2e — map `loom-capture.internal` → the tailnet host, and reconcile the
-   scheme/cert: loom-render uses `https://…` (:443), which is the TLS serve, but the serve cert is
-   for the `*.ts.net` name, not `loom-capture.internal` → cert mismatch. Options: (a) an `/etc/hosts`
-   alias + accept that the runtime egress must tolerate the cert name, (b) point `loom-capture.internal`
-   at the `:443` serve with a matching cert/SAN, or (c) change loom-render's `SCREENSHOT_HOST` to the
-   real tailnet hostname. **Decide + wire this before declaring stage 2 done.**
+   ✅ **RESOLVED (2026-07-27):** `loom-capture.internal` is now an `/etc/hosts` alias to the
+   capture-shim host tailnet IP, and loom-render calls the **plain-HTTP backend directly**
+   (`http://loom-capture.internal:8939/screenshot`) rather than the `:443` HTTPS front. The
+   HTTPS front cert is `*.ts.net` and fails TLS verify for `loom-capture.internal` (the runtime
+   egress verifies certs); the tailnet is WireGuard-encrypted and `/screenshot` is
+   unauthenticated, so plain HTTP is correct here. Verified: JPEG 200 from that exact URL.
+   NB: the `/etc/hosts` alias is a host-level edit — make it durable in host provisioning so it
+   survives a rebuild/reimage.
 
 ### Verdict
 Reasonably secure for internal infrastructure — network-layer auth + SSRF filter + kernel egress

@@ -37,6 +37,11 @@
         "secret_name": "google_oauth_token",
         "location": { "type": "bearer" },
         "host_patterns": ["www.googleapis.com"]
+      },
+      "loom_screenshot_api_key": {
+        "secret_name": "loom_screenshot_api_key",
+        "location": { "type": "bearer" },
+        "host_patterns": ["loom-capture.internal"]
       }
     }
   },

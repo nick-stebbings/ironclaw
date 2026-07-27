@@ -20,8 +20,8 @@ Pipeline: **Stage 1** (`personalized-loom-outreach-poc` bundle → ElevenLabs MP
 | **Decoders** | **JPEG + MP3 present; NO PNG decoder** (`ff_png_decoder: 0`) | `nm libavcodec.a` |
 | **`tool-invoke`** | 🔴 **DENY-ALL in the live runtime** — only `DenyWasmHostTools` exists; nothing wires `.with_tools(...)` | `host.rs:604`, `runtime_adapters.rs:751-767` |
 | `http-request` | ✅ Real (`RuntimeHttpEgress` wired via `.with_http`) | `runtime_adapters.rs:767` |
-| Capture service | 🔴 Does not exist; no browser/screenshot capability anywhere in IronClaw | `docs/specs/ironclaw-capture-skill.md` |
-| Registration | 🔴 loom-render NOT in `registry/tools`, not installed | `ls registry/tools` |
+| Capture service | ✅ Real (not a stub): `capture-shim.service` live (Playwright + headless Chromium), tailnet-only, unauthenticated `/screenshot`. Extension installed on `pilot` **and** `drew-claw`. | `systemctl status capture-shim` |
+| Registration | ✅ `loom-render` installed on `pilot` **and** `drew-claw` (extension-catalog `search`/`install`, not `registry/tools` — see §2.5) | `extension search loom` on both instances |
 
 ---
 
@@ -91,35 +91,83 @@ allowlist.
    sandbox memory is 10 MiB — nowhere near enough; the tool must request more.
    - **DONE-when:** a worst-case-input encode completes under committed limits; inputs clamped
      so no request can exceed them.
-5. **Register + install.** Add loom-render (and google-drive v0.3.0) to `registry/tools`;
-   install on `pilot`. Confirm it appears in the WitTool `tools/list`.
-   - **DONE-when:** the agent on `pilot` can see and invoke `loom-render`.
+5. **Register + install.** ✅ DONE on both `pilot` and `drew-claw` — turned out to need
+   two manifest-level fixes, not a `registry/tools` entry (that registry is unrelated to the
+   `extension search`/`install` discovery path, which scans `$IRONCLAW_REBORN_HOME/local-dev/system/extensions/*/manifest.toml`
+   directly):
+   - **`trust` must be `third_party`, not `first_party_requested`.** Manifests discovered via
+     the filesystem scan are always `ManifestSource::InstalledLocal`, and
+     `ManifestSource::allows_first_party()` is `true` only for `HostBundled`
+     (`ironclaw_extensions/src/v2.rs:132-135, 765-776`). Requesting `first_party_requested`
+     from an `InstalledLocal` source is `ManifestV2Error::TrustForbiddenForSource`, which
+     `load_filesystem_packages()` **silently fail-open-swallows** (only a `tracing::warn!`,
+     no CLI-visible error — see `available_extensions.rs:1655-1668`, citing #5966) — this is
+     why `extension search` returned `count: 0` with zero explanation.
+   - **Legacy top-level `[[capabilities]]` is rejected for `InstalledLocal`.** Must declare
+     `[[host_api]] id = "ironclaw.capability_provider/v1"` / `section = "capability_provider.tools"`
+     and nest capabilities under `[[capability_provider.tools.capabilities]]`, matching how
+     `github`'s manifest (a working first-party wasm tool) already does it. Same fail-open
+     swallow applies, surfaced only via `tracing::warn!{message="skipping invalid available
+     extension manifest", reason="...legacy top-level capabilities..."}`.
+   - **Tooling footgun:** the standalone CLI's storage root is
+     `$IRONCLAW_REBORN_HOME/<profile-subdir>/...`, not `$IRONCLAW_REBORN_HOME/...` directly —
+     for the `LocalDev` profile the subdir is literally `local-dev`
+     (`ironclaw_reborn_config/src/profile.rs:84-86`,
+     `ironclaw_reborn_cli/src/runtime/mod.rs:978-986`). To point the CLI at a real running
+     instance's on-disk state, set `IRONCLAW_REBORN_HOME=/var/lib/ironclaw/instances/<id>/home`
+     (one level *above* the `local-dev` dir you can see on disk), e.g.:
+     `IRONCLAW_REBORN_HOME=/var/lib/ironclaw/instances/pilot/home ironclaw-reborn extension search loom`.
+     Also run from outside the repo tree (e.g. `/tmp`) — `dotenvy::dotenv()` in `main()` loads
+     `/opt/ironclaw/src/.env` if invoked from inside it, and `OTEL_EXPORTER_OTLP_ENDPOINT` being
+     set there panics with "no reactor running" (OTel init happens outside a Tokio context in
+     the CLI's sync `main()`).
+   - **DONE-when:** ✅ the agent on `pilot`/`drew-claw` can see `loom-render` via
+     `extension search loom`. `extension activate` still returns `blockers: [{credential: google}]`
+     when run standalone (a tenant-identity mismatch — the CLI probe's default owner isn't the
+     real chat agent's tenant, which already has Google connected via `google-drive`/`gsuite`);
+     expected to activate cleanly when the real agent calls `builtin.extension_activate` under
+     its own tenant. Not yet confirmed live in a real chat turn.
 
 ---
 
-## 3. Capture — deferred, but has a hard dependency
+## 3. Capture — ✅ DONE (real engine shipped, not a stub)
 
-Per `docs/specs/ironclaw-capture-skill.md`: no browser/screenshot/crawl exists in IronClaw;
-the browser-driving engine is **native host-side work (can't run in wasm)** — net-new build.
-Its transport binding (tool-invoke vs internal http endpoint) shares the §1 `tool-invoke`
-blocker.
+Superseded: this was scoped as a throwaway JPEG stub because the browser engine was assumed
+to be a large net-new build blocked on the `tool-invoke` gap. It shipped as a real capture
+engine instead — `capture-shim.service` (Playwright + headless `chrome-headless-shell`),
+reachable tailnet-only at `http://loom-capture.internal:8939` (plain HTTP; the `tailscale
+serve` HTTPS front uses a `*.ts.net` cert that egress cert verification rejects, so
+`loom-render` talks to it over the internal alias instead — see `/etc/hosts` + git history
+`4c2192f1a`). `/screenshot` is intentionally unauthenticated (tailnet-only is the boundary;
+`loom_screenshot_api_key` credential was dropped, `958210045`). Extension installed on
+`pilot` and `drew-claw` (copied from `pilot`'s working manifest — identical across instances,
+no per-instance config).
 
-- **For e2e testing now (per direction):** stand up a **throwaway stub** returning a canned
-  **JPEG** at the capture endpoint loom-render calls, so the full flow can be exercised before
-  the real engine exists. Swap for the real engine later.
-- **DONE-when (stub):** loom-render, given a real Drive audio id + any URL, produces a video
-  in Drive using the stub capture. Real engine tracked separately in the capture spec.
+- **DONE-when:** ✅ loom-render, given a real Drive audio id + any URL, can reach
+  `capture.screenshot` and get back a real JPEG. Full lead→video Drive flow not yet run
+  end-to-end on a live tenant.
 
 ---
 
 ## 4. Stage 1 — audio path (independent; near-term win)
 
-1. **Merge `agentiffai-workflows!9`** (mergeable, CI green) → bundle on `main`.
+1. **Merge `agentiffai-workflows!9`** — ✅ merged to `main`.
 2. **Provision the tenant:** Google + Apollo connected; the bundle's 4 n8n helper webhooks
-   deployed/synced.
-3. **Deploy + register the `loom-pipeline` shim** on the instance (`make deploy-shim` +
-   `make install-extension`), set per-tenant secrets (agentiff refresh token, ElevenLabs
-   key/voice).
+   deployed/synced. Not yet confirmed.
+3. **Deploy + register the `loom-pipeline` shim.** 🔴 **Still the real blocker, precisely
+   identified this session:** the Python shim source is done and refactored
+   (`ops-library/shims/loom-pipeline-shim/`, shares `agentiff_shim_base.py` with
+   `social-media-v2-shim`), but `loom-pipeline-shim.service` **does not exist on the box** —
+   confirmed via `systemctl list-units --all --type=service | grep shim` (every other shim —
+   `notion-rest-shim`, `social-media-v2-shim`, `capture-shim`, `meta-ads-shim`,
+   `creative-studio-shim`, `content-review-mcp`, `vane-shim`, `agentiff-warehouse-mcp` — is
+   `loaded active running`; `loom-pipeline-shim` is absent entirely, not even
+   inactive/failed). `drew-claw` has a `system/extensions/loom-pipeline/manifest.toml`
+   file already, but it points at a backend that was never deployed, so it is **not actually
+   functional there either** despite `extension search` listing it. Needed:
+   `make deploy-shim SHIM=loom-pipeline-shim PORT=<unused-89xx>` (ports 8930-8943 already
+   taken — check with `ss -tlnp | grep :89`), then `make install-extension EXT=loom-pipeline
+   INSTANCE=pilot` (and `drew-claw`, replacing its stale manifest), then per-tenant secrets.
    - **DONE-when:** "generate loom intro audio" produces an MP3 in Drive end-to-end.
 
 *(Stage 1 has no dependency on the §1 blocker — it can ship while Stage 2 is unblocked.)*
@@ -129,7 +177,12 @@ blocker.
 ## 5. Wiring + finish
 
 1. **`drew-claw`** still runs the pre-patch (Jul 23) binary — restart it deliberately when
-   convenient to pick up the 16k cap + committed code.
+   convenient to pick up the 16k table cap **and** the `mcp.rs` `InstalledLocal`
+   credential-injection fix (`f01cfc77d`, this session — widens product-auth credential
+   injection from `HostBundled`-only to also cover `InstalledLocal` hosted-MCP shims;
+   load-bearing for `notion-rest`/`google-rest`/`social-media-v2`/`loom-pipeline`'s tokens,
+   all of which are `InstalledLocal`). `loom-render` itself installs/discovers fine on the
+   old binary but **will not instantiate** (16k table cap) until restarted.
 2. **Flip the skill** `loom-pipeline-render-video` `disabled → active` (ops-library
    `agentiff-tool-manifest.yml`) once loom-render is installed; add its MODULES.md module.
 3. **Stage-1 → Stage-2 handoff:** the render skill passes stage-1's `audio_drive_file_id`.

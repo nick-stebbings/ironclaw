@@ -11,7 +11,8 @@
     "notes": [
       "Stage 2 of the Loom outreach pipeline; consumes the audio produced by personalized-loom-outreach-poc.",
       "Drive I/O is direct HTTP to the Google Drive REST API; the host injects the tenant Google OAuth token (http.credentials), the same way the google-drive tool authenticates. tool-invoke is a deny-all stub in the runtime.",
-      "The screenshot service MUST return JPEG -- the bundled ffmpeg has no PNG decoder."
+      "The screenshot service MUST return JPEG -- the bundled ffmpeg has no PNG decoder.",
+      "The /screenshot capture surface is unauthenticated (tailnet-only, co-located caller); loom-render needs no capture key."
     ]
   },
   "http": {
@@ -37,16 +38,11 @@
         "secret_name": "google_oauth_token",
         "location": { "type": "bearer" },
         "host_patterns": ["www.googleapis.com"]
-      },
-      "loom_screenshot_api_key": {
-        "secret_name": "loom_screenshot_api_key",
-        "location": { "type": "bearer" },
-        "host_patterns": ["loom-capture.internal"]
       }
     }
   },
   "secrets": {
-    "allowed_names": ["loom_screenshot_api_key", "google_oauth_token"]
+    "allowed_names": ["google_oauth_token"]
   },
   "auth": {
     "secret_name": "google_oauth_token",

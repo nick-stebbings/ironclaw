@@ -263,7 +263,7 @@ fn execute_inner(params_json: &str) -> Result<String, String> {
     let name = params
         .output_name
         .clone()
-        .unwrap_or_else(|| format!("loom-{}.webm", host::now_millis()));
+        .unwrap_or_else(|| format!("loom-{}.{}", host::now_millis(), composed.container));
 
     let file_id = upload_video(
         &params.drive_output_folder_id,

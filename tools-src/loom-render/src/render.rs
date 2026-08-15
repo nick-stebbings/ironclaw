@@ -67,6 +67,26 @@ impl EncoderAvailability {
             ))
         }
     }
+
+    pub fn choose_for_audio(&self, audio_codec: &'static str) -> Result<Triple, String> {
+        match audio_codec {
+            "opus" | "vorbis" if self.vp9 => Ok(Triple {
+                video: "libvpx-vp9",
+                audio: audio_codec,
+                container: "webm",
+                mime_type: "video/webm",
+            }),
+            "aac" if self.av1 => Ok(Triple {
+                video: "libaom-av1",
+                audio: "aac",
+                container: "mp4",
+                mime_type: "video/mp4",
+            }),
+            _ => Err(format!(
+                "no compatible video/container pair for audio codec {audio_codec}"
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,16 +167,14 @@ pub fn probe_report() -> String {
 }
 
 pub fn compose(input: Compose<'_>) -> Result<Composed, String> {
-    let triple = EncoderAvailability::probe().choose()?;
-
     #[cfg(target_arch = "wasm32")]
     {
-        crate::encode::encode(&input, triple)
+        crate::encode::encode(&input)
     }
     // Host builds have no ffmpeg; compose is a no-op the runtime never hits.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (&input, triple);
+        let _ = &input;
         Err("video encode requires the wasm target".to_string())
     }
 }
@@ -195,6 +213,21 @@ mod tests {
     }
 
     #[test]
+    fn routes_aac_audio_to_mp4() {
+        let a = EncoderAvailability {
+            vp9: true,
+            av1: true,
+            opus: true,
+            aac: true,
+            vorbis: true,
+        };
+        let t = a.choose_for_audio("aac").unwrap();
+        assert_eq!(t.container, "mp4");
+        assert_eq!(t.video, "libaom-av1");
+        assert_eq!(t.audio, "aac");
+    }
+
+    #[test]
     fn errors_when_no_pair_is_usable() {
         let a = EncoderAvailability {
             vp9: true,
@@ -203,6 +236,9 @@ mod tests {
             aac: false,
             vorbis: false,
         };
-        assert!(a.choose().is_err(), "video without audio is not a usable pair");
+        assert!(
+            a.choose().is_err(),
+            "video without audio is not a usable pair"
+        );
     }
 }

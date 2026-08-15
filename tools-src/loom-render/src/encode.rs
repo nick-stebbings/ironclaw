@@ -22,7 +22,7 @@ use ffmpeg_wasi::avcodec::*;
 use ffmpeg_wasi::{avformat, swscale};
 
 use crate::audio;
-use crate::render::{Compose, Composed, EncoderAvailability, Triple};
+use crate::render::{Compose, Composed, EncoderAvailability};
 
 // errno sentinels ffmpeg returns; both are stable values, hardcoded to avoid the
 // macro/const ambiguity across the per-module bindings.
@@ -154,11 +154,11 @@ unsafe fn decode_image(bytes: &[u8]) -> Result<(*mut AVFrame, FrameGuard), Strin
     Err("could not decode screenshot as PNG or JPEG".into())
 }
 
-pub fn encode(input: &Compose<'_>, triple: Triple) -> Result<Composed, String> {
-    unsafe { encode_inner(input, triple) }
+pub fn encode(input: &Compose<'_>) -> Result<Composed, String> {
+    unsafe { encode_inner(input) }
 }
 
-unsafe fn encode_inner(input: &Compose<'_>, triple: Triple) -> Result<Composed, String> {
+unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
     let width = input.width as c_int;
     let height = input.height as c_int;
     let fps = input.fps.max(1) as c_int;
@@ -169,11 +169,29 @@ unsafe fn encode_inner(input: &Compose<'_>, triple: Triple) -> Result<Composed, 
 
     let (src, _src_guard) = decode_image(input.screenshot)?;
 
+    // Decode and plan audio before choosing the video/container pair. A 44.1
+    // kHz MP3 cannot use Opus without resampling, so it must select AAC/MP4.
+    let avail = EncoderAvailability::probe();
+    let audio: Option<(audio::DecodedAudio, audio::AudioPlan)> = if input.audio_mp3.is_empty() {
+        None
+    } else {
+        let decoded = audio::decode_mp3(input.audio_mp3)?;
+        let plan = audio::plan_audio(decoded.sample_rate, avail.opus, avail.aac, avail.vorbis)?;
+        Some((decoded, plan))
+    };
+    let triple = match audio.as_ref() {
+        Some((_, plan)) => avail.choose_for_audio(plan.codec_name)?,
+        None => avail.choose()?,
+    };
+
     // --- video encoder ---
     let venc_name = std::ffi::CString::new(triple.video).unwrap();
     let venc = avcodec_find_encoder_by_name(venc_name.as_ptr());
     if venc.is_null() {
-        return Err(format!("video encoder {} not found in this build", triple.video));
+        return Err(format!(
+            "video encoder {} not found in this build",
+            triple.video
+        ));
     }
     let vctx = avcodec_alloc_context3(venc);
     if vctx.is_null() {
@@ -196,16 +214,13 @@ unsafe fn encode_inner(input: &Compose<'_>, triple: Triple) -> Result<Composed, 
     // --- audio: decode the MP3 and open a rate-matched encoder (no resampler) ---
     // A container needs all streams declared before the header, so this happens
     // up front. Empty audio is allowed -> a silent, video-only file.
-    let avail = EncoderAvailability::probe();
-    let audio: Option<(audio::DecodedAudio, audio::AudioEncoder)> =
-        if input.audio_mp3.is_empty() {
-            None
-        } else {
-            let decoded = audio::decode_mp3(input.audio_mp3)?;
-            let plan = audio::plan_audio(decoded.sample_rate, avail.opus, avail.vorbis)?;
+    let audio: Option<(audio::DecodedAudio, audio::AudioEncoder)> = match audio {
+        None => None,
+        Some((decoded, plan)) => {
             let enc = audio::open_audio_encoder(&plan, &decoded, true)?;
             Some((decoded, enc))
-        };
+        }
+    };
 
     // --- in-memory muxer ---
     let sink = Box::into_raw(Box::new(WriteSink { buf: Vec::new() }));
@@ -236,7 +251,10 @@ unsafe fn encode_inner(input: &Compose<'_>, triple: Triple) -> Result<Composed, 
     {
         avformat::avio_context_free(&mut (avio as *mut _));
         drop(Box::from_raw(sink));
-        return Err(format!("could not allocate {} output context", triple.container));
+        return Err(format!(
+            "could not allocate {} output context",
+            triple.container
+        ));
     }
     (*fmt_ctx).pb = avio;
     // From here the muxer owns avio; the guard frees fmt_ctx + sink on every path.
@@ -260,7 +278,10 @@ unsafe fn encode_inner(input: &Compose<'_>, triple: Triple) -> Result<Composed, 
         if audio_stream.is_null() {
             return Err("avformat_new_stream (audio) returned null".into());
         }
-        (*audio_stream).time_base = avformat::AVRational { num: 1, den: enc.sample_rate };
+        (*audio_stream).time_base = avformat::AVRational {
+            num: 1,
+            den: enc.sample_rate,
+        };
         audio_stream_tb = (*audio_stream).time_base;
         if avcodec_parameters_from_context((*audio_stream).codecpar as *mut _, enc.ctx) < 0 {
             return Err("avcodec_parameters_from_context (audio) failed".into());
@@ -331,7 +352,10 @@ unsafe fn encode_inner(input: &Compose<'_>, triple: Triple) -> Result<Composed, 
             // rescale from the encoder's avcodec::AVRational to an avcodec one
             // built from the stream's avformat::AVRational fields (distinct types,
             // same C layout).
-            let dst_tb = AVRational { num: stream_tb.num, den: stream_tb.den };
+            let dst_tb = AVRational {
+                num: stream_tb.num,
+                den: stream_tb.den,
+            };
             av_packet_rescale_ts(pkt, (*vctx).time_base, dst_tb);
             if avformat::av_interleaved_write_frame(fmt_ctx, pkt as *mut _) < 0 {
                 av_packet_unref(pkt);
@@ -375,7 +399,10 @@ unsafe fn encode_inner(input: &Compose<'_>, triple: Triple) -> Result<Composed, 
                     return Err(ffmpeg_err("audio receive_packet failed", r));
                 }
                 (*a_pkt).stream_index = (*audio_stream).index;
-                let dst_tb = AVRational { num: audio_stream_tb.num, den: audio_stream_tb.den };
+                let dst_tb = AVRational {
+                    num: audio_stream_tb.num,
+                    den: audio_stream_tb.den,
+                };
                 av_packet_rescale_ts(a_pkt, (*enc.ctx).time_base, dst_tb);
                 let _ = offset_pts;
                 if avformat::av_interleaved_write_frame(fmt_ctx, a_pkt as *mut _) < 0 {

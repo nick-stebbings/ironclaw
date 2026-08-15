@@ -29,7 +29,7 @@ const FLTP: AVSampleFormat = AVSampleFormat_AV_SAMPLE_FMT_FLTP;
 const MP3_ID: AVCodecID = AVCodecID_AV_CODEC_ID_MP3;
 
 /// Opus's supported sample rates. Anything else must use Vorbis (no resampler).
-fn opus_ok(rate: c_int) -> bool {
+pub fn opus_ok(rate: c_int) -> bool {
     matches!(rate, 8000 | 12000 | 16000 | 24000 | 48000)
 }
 
@@ -178,16 +178,27 @@ pub struct AudioPlan {
 }
 
 /// Pick an audio codec that needs no resampling for this source rate.
-pub fn plan_audio(sample_rate: c_int, opus_available: bool, vorbis_available: bool) -> Result<AudioPlan, String> {
+pub fn plan_audio(
+    sample_rate: c_int,
+    opus_available: bool,
+    aac_available: bool,
+    vorbis_available: bool,
+) -> Result<AudioPlan, String> {
     if opus_available && opus_ok(sample_rate) {
         Ok(AudioPlan { codec_name: "opus" })
+    } else if aac_available {
+        // AAC accepts 44.1 kHz ElevenLabs MP3s directly and pairs with the
+        // AV1/MP4 fallback, avoiding a resampler this WASI build lacks.
+        Ok(AudioPlan { codec_name: "aac" })
     } else if vorbis_available {
         // Vorbis takes any rate + FLTP -> the resample-free WebM fallback.
-        Ok(AudioPlan { codec_name: "vorbis" })
+        Ok(AudioPlan {
+            codec_name: "vorbis",
+        })
     } else if opus_available {
         Err(format!(
             "source is {sample_rate} Hz, which Opus cannot encode, and no Vorbis \
-             encoder is available to take its place (no resampler in this build)"
+             AAC/Vorbis encoder is available to take its place (no resampler in this build)"
         ))
     } else {
         Err("no WebM-compatible audio encoder (opus/vorbis) in this build".into())

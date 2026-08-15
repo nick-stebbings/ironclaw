@@ -19,6 +19,9 @@ section = "capability_provider.tools"
 id = "loom-render.render"
 description = "Render a personalized Loom-style video. Requires audio_drive_file_id, website_url and drive_output_folder_id; returns video_drive_file_id."
 effects = ["dispatch_capability", "network", "use_secret", "external_write"]
+network_targets = [
+  { scheme = "http", host_pattern = "loom-capture.internal", port = 8939 },
+]
 # Drive I/O is direct HTTP to the Drive REST API with the tenant's Google OAuth
 # token injected by the host — the same arrangement the google-drive tool uses.
 # The capture surface (loom-capture.internal/screenshot) is tailnet-only and

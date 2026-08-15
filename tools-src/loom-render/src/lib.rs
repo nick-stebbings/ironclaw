@@ -102,7 +102,11 @@ impl Params {
             "16:9" => (short_edge * 16 / 9, short_edge),
             "9:16" => (short_edge, short_edge * 16 / 9),
             "1:1" => (short_edge, short_edge),
-            other => return Err(format!("unsupported aspect_ratio '{other}' (16:9, 9:16 or 1:1)")),
+            other => {
+                return Err(format!(
+                    "unsupported aspect_ratio '{other}' (16:9, 9:16 or 1:1)"
+                ));
+            }
         };
         Ok((w & !1, h & !1))
     }
@@ -143,7 +147,10 @@ fn fetch_audio(file_id: &str) -> Result<Vec<u8>, String> {
     let response = host::http_request("GET", &url, "{}", None, Some(60_000))
         .map_err(|e| format!("drive download request failed: {e}"))?;
     if response.status < 200 || response.status >= 300 {
-        return Err(format!("drive download returned status {}", response.status));
+        return Err(format!(
+            "drive download returned status {}",
+            response.status
+        ));
     }
     if response.body.is_empty() {
         return Err(format!("audio file {file_id} is empty"));
@@ -178,12 +185,7 @@ fn capture_website(url: &str, width: u32, height: u32) -> Result<Vec<u8>, String
 
 /// Upload the rendered video to Google Drive over HTTP (multipart) and return
 /// its file id. Auth is injected by the host for `www.googleapis.com`.
-fn upload_video(
-    folder_id: &str,
-    name: &str,
-    bytes: &[u8],
-    mime: &str,
-) -> Result<String, String> {
+fn upload_video(folder_id: &str, name: &str, bytes: &[u8], mime: &str) -> Result<String, String> {
     const BOUNDARY: &str = "loomrenderQ8x2Zt7pboundary";
     let metadata = serde_json::json!({ "name": name, "parents": [folder_id] }).to_string();
 
@@ -233,8 +235,8 @@ fn execute_inner(params_json: &str) -> Result<String, String> {
         return Ok(render::probe_report());
     }
 
-    let params: Params = serde_json::from_str(params_json)
-        .map_err(|e| format!("invalid params: {e}"))?;
+    let params: Params =
+        serde_json::from_str(params_json).map_err(|e| format!("invalid params: {e}"))?;
     params.validate()?;
     let (width, height) = params.dimensions()?;
 
@@ -287,6 +289,34 @@ fn execute_inner(params_json: &str) -> Result<String, String> {
     .to_string())
 }
 
+fn structured_error(error: &str) -> String {
+    let code = if error.starts_with("drive download") || error.starts_with("audio file") {
+        "loom_drive_download_failed"
+    } else if error.starts_with("screenshot") {
+        "loom_screenshot_failed"
+    } else if error.starts_with("drive upload") {
+        "loom_drive_upload_failed"
+    } else if error.contains("encoder") || error.contains("encode") || error.contains("mux") {
+        "loom_encode_failed"
+    } else if error.starts_with("invalid params")
+        || error.contains("must not be empty")
+        || error.contains("must start with")
+        || error.contains("unsupported resolution")
+        || error.contains("unsupported aspect_ratio")
+        || error.contains("duration_sec must")
+    {
+        "loom_invalid_input"
+    } else {
+        "loom_render_failed"
+    };
+
+    host::log(
+        host::LogLevel::Error,
+        &format!("loom-render failed [{code}]: {error}"),
+    );
+    serde_json::json!({ "code": code, "kind": "operation_failed" }).to_string()
+}
+
 impl exports::near::agent::tool::Guest for LoomRenderTool {
     fn execute(req: exports::near::agent::tool::Request) -> exports::near::agent::tool::Response {
         match execute_inner(&req.params) {
@@ -296,7 +326,7 @@ impl exports::near::agent::tool::Guest for LoomRenderTool {
             },
             Err(error) => exports::near::agent::tool::Response {
                 output: None,
-                error: Some(error),
+                error: Some(structured_error(&error)),
             },
         }
     }
@@ -320,6 +350,25 @@ export!(LoomRenderTool);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renderer_errors_have_stable_stage_codes() {
+        assert!(
+            structured_error("drive download returned status 404")
+                .contains("loom_drive_download_failed")
+        );
+        assert!(
+            structured_error("screenshot service returned status 502")
+                .contains("loom_screenshot_failed")
+        );
+        assert!(
+            structured_error("drive upload returned status 403")
+                .contains("loom_drive_upload_failed")
+        );
+        assert!(
+            structured_error("video encoder libvpx-vp9 not found").contains("loom_encode_failed")
+        );
+    }
 
     fn params(extra: &str) -> Result<Params, String> {
         let base = format!(
@@ -353,8 +402,18 @@ mod tests {
 
     #[test]
     fn rejects_out_of_range_duration() {
-        assert!(params(r#","duration_sec":0.5"#).unwrap().validate().is_err());
-        assert!(params(r#","duration_sec":999"#).unwrap().validate().is_err());
+        assert!(
+            params(r#","duration_sec":0.5"#)
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+        assert!(
+            params(r#","duration_sec":999"#)
+                .unwrap()
+                .validate()
+                .is_err()
+        );
         assert!(params(r#","duration_sec":42"#).unwrap().validate().is_ok());
     }
 
@@ -372,7 +431,10 @@ mod tests {
         // The whole point of the diagnostic: {"probe_encoders":true} alone must
         // reach the probe, without audio_drive_file_id / website_url / folder.
         let out = execute_inner(r#"{"probe_encoders":true}"#);
-        assert!(out.is_ok(), "probe must not require the render fields: {out:?}");
+        assert!(
+            out.is_ok(),
+            "probe must not require the render fields: {out:?}"
+        );
         let v: serde_json::Value = serde_json::from_str(&out.unwrap()).unwrap();
         assert_eq!(v["probe"], true);
     }
@@ -381,7 +443,11 @@ mod tests {
     fn schema_is_valid_json_and_matches_the_struct() {
         let schema: serde_json::Value = serde_json::from_str(SCHEMA).expect("schema must be JSON");
         let props = schema["properties"].as_object().unwrap();
-        for required in ["audio_drive_file_id", "website_url", "drive_output_folder_id"] {
+        for required in [
+            "audio_drive_file_id",
+            "website_url",
+            "drive_output_folder_id",
+        ] {
             assert!(props.contains_key(required), "schema missing {required}");
         }
         // additionalProperties:false means a field the struct accepts but the

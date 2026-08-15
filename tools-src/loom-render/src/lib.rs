@@ -40,7 +40,10 @@ const SCREENSHOT_HOST: &str = "loom-capture.internal";
 // WireGuard-encrypted and /screenshot is unauthenticated, so plain HTTP is fine.
 const SCREENSHOT_PORT: u16 = 8939;
 
-const DEFAULT_FPS: u32 = 25;
+// The visual is a still website capture, so extra frames add no information.
+// One frame per second keeps playback valid while making single-threaded WASM
+// encoding practical within the workflow deadline.
+const DEFAULT_FPS: u32 = 1;
 const MAX_DURATION_SEC: f64 = 120.0;
 
 const SCHEMA: &str = r#"{

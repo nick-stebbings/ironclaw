@@ -212,7 +212,27 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
         (*vctx).flags |= AV_CODEC_FLAG_GLOBAL_HEADER as c_int;
     }
 
-    if avcodec_open2(vctx, venc, ptr::null_mut()) < 0 {
+    let mut video_options: *mut AVDictionary = ptr::null_mut();
+    if triple.video == "libaom-av1" {
+        // libaom defaults to an offline quality preset that is far too slow for
+        // a synchronous, single-threaded WASM tool. These settings are intended
+        // for real-time delivery and avoid lookahead over a static visual.
+        for (key, value) in [
+            ("usage", "realtime"),
+            ("cpu-used", "8"),
+            ("lag-in-frames", "0"),
+        ] {
+            let key = std::ffi::CString::new(key).unwrap();
+            let value = std::ffi::CString::new(value).unwrap();
+            if av_dict_set(&mut video_options, key.as_ptr(), value.as_ptr(), 0) < 0 {
+                av_dict_free(&mut video_options);
+                return Err("could not set real-time AV1 encoder options".into());
+            }
+        }
+    }
+    let open_result = avcodec_open2(vctx, venc, &mut video_options);
+    av_dict_free(&mut video_options);
+    if open_result < 0 {
         return Err(format!("could not open {} encoder", triple.video));
     }
 

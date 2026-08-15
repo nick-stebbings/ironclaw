@@ -53,7 +53,7 @@ const SCHEMA: &str = r#"{
     "website_url":            { "type": "string", "minLength": 1, "description": "Lead's website; captured as the video's visual." },
     "drive_output_folder_id": { "type": "string", "minLength": 1, "description": "Drive folder the rendered video is uploaded to." },
     "aspect_ratio":  { "type": "string", "enum": ["16:9","9:16","1:1"], "default": "16:9" },
-    "resolution":    { "type": "string", "enum": ["720p","1080p"], "default": "1080p" },
+    "resolution":    { "type": "string", "enum": ["720p","1080p"], "default": "720p" },
     "duration_sec":  { "type": "number", "minimum": 1, "maximum": 120, "description": "Defaults to the audio length." },
     "output_name":   { "type": "string", "description": "Drive file name. Defaults to loom-<timestamp>.webm." },
     "probe_encoders": { "type": "boolean", "description": "Diagnostic: report which ffmpeg encoders this build provides and which container/codec pair would be chosen, then stop. Renders nothing." }
@@ -87,7 +87,7 @@ fn default_aspect() -> String {
     "16:9".to_string()
 }
 fn default_resolution() -> String {
-    "1080p".to_string()
+    "720p".to_string()
 }
 
 impl Params {
@@ -386,11 +386,11 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_1080p_16_9() {
+    fn defaults_are_720p_16_9() {
         let p = params("").unwrap();
-        assert_eq!(p.resolution, "1080p");
+        assert_eq!(p.resolution, "720p");
         assert_eq!(p.aspect_ratio, "16:9");
-        assert_eq!(p.dimensions().unwrap(), (1920, 1080));
+        assert_eq!(p.dimensions().unwrap(), (1280, 720));
     }
 
     #[test]

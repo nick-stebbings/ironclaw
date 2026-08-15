@@ -206,6 +206,11 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
     (*vctx).gop_size = fps; // one keyframe per second
     (*vctx).bit_rate = (width as i64 * height as i64) / 2; // a still needs little
     (*vctx).thread_count = 1; // wasm has no threads
+    if triple.container == "mp4" {
+        // MP4 stores codec setup in the container header. Without this flag,
+        // the muxer cannot initialize AV1 for fragmented, non-seekable output.
+        (*vctx).flags |= AV_CODEC_FLAG_GLOBAL_HEADER as c_int;
+    }
 
     if avcodec_open2(vctx, venc, ptr::null_mut()) < 0 {
         return Err(format!("could not open {} encoder", triple.video));
@@ -288,8 +293,20 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
         }
     }
 
-    if avformat::avformat_write_header(fmt_ctx, ptr::null_mut()) < 0 {
-        return Err("avformat_write_header failed".into());
+    let mut mux_options: *mut avformat::AVDictionary = ptr::null_mut();
+    if triple.container == "mp4" {
+        // Our custom AVIO callback is write-only. Fragmented MP4 avoids the
+        // normal final seek back to the moov atom and is valid for streaming.
+        let key = std::ffi::CString::new("movflags").unwrap();
+        let value = std::ffi::CString::new("frag_keyframe+empty_moov+default_base_moof").unwrap();
+        if avformat::av_dict_set(&mut mux_options, key.as_ptr(), value.as_ptr(), 0) < 0 {
+            return Err("could not set fragmented MP4 options".into());
+        }
+    }
+    let header_result = avformat::avformat_write_header(fmt_ctx, &mut mux_options);
+    avformat::av_dict_free(&mut mux_options);
+    if header_result < 0 {
+        return Err(ffmpeg_err("avformat_write_header failed", header_result));
     }
 
     // --- scale the source frame to a reusable YUV420P frame ---

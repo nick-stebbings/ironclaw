@@ -22,6 +22,7 @@ use std::os::raw::c_char;
 pub struct EncoderAvailability {
     pub vp9: bool,
     pub av1: bool,
+    pub mpeg4: bool,
     pub opus: bool,
     pub aac: bool,
     pub vorbis: bool,
@@ -33,6 +34,7 @@ impl EncoderAvailability {
         Self {
             vp9: encoder_exists("libvpx-vp9"),
             av1: encoder_exists("libaom-av1"),
+            mpeg4: encoder_exists("mpeg4"),
             // ffmpeg's *native* Opus encoder, not libopus (no libopus.a ships).
             // Historically flagged experimental, so the encoder context needs
             // strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL.
@@ -53,8 +55,14 @@ impl EncoderAvailability {
                 container: "webm",
                 mime_type: "video/webm",
             })
+        } else if self.mpeg4 && self.aac {
+            Ok(Triple {
+                video: "mpeg4",
+                audio: "aac",
+                container: "mp4",
+                mime_type: "video/mp4",
+            })
         } else if self.av1 && self.aac {
-            // Both non-experimental; the fallback if native Opus proves awkward.
             Ok(Triple {
                 video: "libaom-av1",
                 audio: "aac",
@@ -75,6 +83,12 @@ impl EncoderAvailability {
                 audio: audio_codec,
                 container: "webm",
                 mime_type: "video/webm",
+            }),
+            "aac" if self.mpeg4 => Ok(Triple {
+                video: "mpeg4",
+                audio: "aac",
+                container: "mp4",
+                mime_type: "video/mp4",
             }),
             "aac" if self.av1 => Ok(Triple {
                 video: "libaom-av1",
@@ -151,6 +165,7 @@ pub fn probe_report() -> String {
         "encoders": {
             "libvpx-vp9": a.vp9,
             "libaom-av1": a.av1,
+            "mpeg4": a.mpeg4,
             "opus": a.opus,
             "aac": a.aac,
             "vorbis": a.vorbis,
@@ -188,6 +203,7 @@ mod tests {
         let a = EncoderAvailability {
             vp9: true,
             av1: true,
+            mpeg4: true,
             opus: true,
             aac: true,
             vorbis: true,
@@ -199,16 +215,18 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_mp4_av1_aac_without_opus() {
+    fn falls_back_to_mp4_mpeg4_aac_without_opus() {
         let a = EncoderAvailability {
             vp9: true,
             av1: true,
+            mpeg4: true,
             opus: false,
             aac: true,
             vorbis: true,
         };
         let t = a.choose().unwrap();
         assert_eq!(t.container, "mp4");
+        assert_eq!(t.video, "mpeg4");
         assert_eq!(t.audio, "aac");
     }
 
@@ -217,13 +235,14 @@ mod tests {
         let a = EncoderAvailability {
             vp9: true,
             av1: true,
+            mpeg4: true,
             opus: true,
             aac: true,
             vorbis: true,
         };
         let t = a.choose_for_audio("aac").unwrap();
         assert_eq!(t.container, "mp4");
-        assert_eq!(t.video, "libaom-av1");
+        assert_eq!(t.video, "mpeg4");
         assert_eq!(t.audio, "aac");
     }
 
@@ -232,6 +251,7 @@ mod tests {
         let a = EncoderAvailability {
             vp9: true,
             av1: false,
+            mpeg4: false,
             opus: false,
             aac: false,
             vorbis: false,

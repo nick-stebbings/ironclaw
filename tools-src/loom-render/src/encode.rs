@@ -40,6 +40,7 @@ const SWS_BILINEAR_FLAG: c_int = 2;
 /// The Vec the muxer writes into, handed to the AVIO callback as opaque userdata.
 struct WriteSink {
     buf: Vec<u8>,
+    position: usize,
 }
 
 unsafe extern "C" fn write_cb(opaque: *mut c_void, buf: *const u8, len: c_int) -> c_int {
@@ -47,9 +48,39 @@ unsafe extern "C" fn write_cb(opaque: *mut c_void, buf: *const u8, len: c_int) -
         return 0;
     }
     let sink = &mut *(opaque as *mut WriteSink);
-    sink.buf
-        .extend_from_slice(std::slice::from_raw_parts(buf, len as usize));
-    len
+    let len = len as usize;
+    let Some(end) = sink.position.checked_add(len) else {
+        return -1;
+    };
+    if end > sink.buf.len() {
+        sink.buf.resize(end, 0);
+    }
+    sink.buf[sink.position..end].copy_from_slice(std::slice::from_raw_parts(buf, len));
+    sink.position = end;
+    len.try_into().unwrap_or(-1)
+}
+
+unsafe extern "C" fn seek_cb(opaque: *mut c_void, offset: i64, whence: c_int) -> i64 {
+    const AVSEEK_SIZE: c_int = 0x10000;
+    if opaque.is_null() {
+        return -1;
+    }
+    let sink = &mut *(opaque as *mut WriteSink);
+    if whence & AVSEEK_SIZE != 0 {
+        return sink.buf.len().try_into().unwrap_or(-1);
+    }
+    let base = match whence & 0x3 {
+        0 => 0_i128,
+        1 => sink.position as i128,
+        2 => sink.buf.len() as i128,
+        _ => return -1,
+    };
+    let next = base + offset as i128;
+    if !(0..=usize::MAX as i128).contains(&next) {
+        return -1;
+    }
+    sink.position = next as usize;
+    next.try_into().unwrap_or(-1)
 }
 
 // --- drop guards: free ffmpeg allocations on every return path ---------------
@@ -248,7 +279,10 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
     };
 
     // --- in-memory muxer ---
-    let sink = Box::into_raw(Box::new(WriteSink { buf: Vec::new() }));
+    let sink = Box::into_raw(Box::new(WriteSink {
+        buf: Vec::new(),
+        position: 0,
+    }));
     let avio_buf = av_malloc(4096) as *mut u8;
     let avio = avformat::avio_alloc_context(
         avio_buf,
@@ -257,7 +291,7 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
         sink as *mut c_void,
         None,
         Some(write_cb),
-        None,
+        Some(seek_cb),
     );
     if avio.is_null() {
         drop(Box::from_raw(sink));
@@ -313,18 +347,7 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
         }
     }
 
-    let mut mux_options: *mut avformat::AVDictionary = ptr::null_mut();
-    if triple.container == "mp4" {
-        // Our custom AVIO callback is write-only. Fragmented MP4 avoids the
-        // normal final seek back to the moov atom and is valid for streaming.
-        let key = std::ffi::CString::new("movflags").unwrap();
-        let value = std::ffi::CString::new("frag_keyframe+empty_moov+default_base_moof").unwrap();
-        if avformat::av_dict_set(&mut mux_options, key.as_ptr(), value.as_ptr(), 0) < 0 {
-            return Err("could not set fragmented MP4 options".into());
-        }
-    }
-    let header_result = avformat::avformat_write_header(fmt_ctx, &mut mux_options);
-    avformat::av_dict_free(&mut mux_options);
+    let header_result = avformat::avformat_write_header(fmt_ctx, ptr::null_mut());
     if header_result < 0 {
         return Err(ffmpeg_err("avformat_write_header failed", header_result));
     }

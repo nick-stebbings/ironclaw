@@ -289,8 +289,8 @@ fn execute_inner(params_json: &str) -> Result<String, String> {
     .to_string())
 }
 
-fn structured_error(error: &str) -> String {
-    let code = if error.starts_with("drive download") || error.starts_with("audio file") {
+fn error_code(error: &str) -> &'static str {
+    if error.starts_with("drive download") || error.starts_with("audio file") {
         "loom_drive_download_failed"
     } else if error.starts_with("screenshot") {
         "loom_screenshot_failed"
@@ -308,7 +308,11 @@ fn structured_error(error: &str) -> String {
         "loom_invalid_input"
     } else {
         "loom_render_failed"
-    };
+    }
+}
+
+fn structured_error(error: &str) -> String {
+    let code = error_code(error);
 
     host::log(
         host::LogLevel::Error,
@@ -353,20 +357,21 @@ mod tests {
 
     #[test]
     fn renderer_errors_have_stable_stage_codes() {
-        assert!(
-            structured_error("drive download returned status 404")
-                .contains("loom_drive_download_failed")
+        assert_eq!(
+            error_code("drive download returned status 404"),
+            "loom_drive_download_failed"
         );
-        assert!(
-            structured_error("screenshot service returned status 502")
-                .contains("loom_screenshot_failed")
+        assert_eq!(
+            error_code("screenshot service returned status 502"),
+            "loom_screenshot_failed"
         );
-        assert!(
-            structured_error("drive upload returned status 403")
-                .contains("loom_drive_upload_failed")
+        assert_eq!(
+            error_code("drive upload returned status 403"),
+            "loom_drive_upload_failed"
         );
-        assert!(
-            structured_error("video encoder libvpx-vp9 not found").contains("loom_encode_failed")
+        assert_eq!(
+            error_code("video encoder libvpx-vp9 not found"),
+            "loom_encode_failed"
         );
     }
 

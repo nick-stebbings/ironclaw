@@ -324,14 +324,12 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
         return Err("avformat_new_stream returned null".into());
     }
     (*stream).time_base = avformat::AVRational { num: 1, den: fps };
-    let stream_tb = (*stream).time_base;
     if avcodec_parameters_from_context((*stream).codecpar as *mut _, vctx) < 0 {
         return Err("avcodec_parameters_from_context failed".into());
     }
 
     // audio stream (if present)
     let mut audio_stream: *mut avformat::AVStream = ptr::null_mut();
-    let mut audio_stream_tb = avformat::AVRational { num: 0, den: 1 };
     if let Some((_, ref enc)) = audio {
         audio_stream = avformat::avformat_new_stream(fmt_ctx, ptr::null());
         if audio_stream.is_null() {
@@ -341,7 +339,6 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
             num: 1,
             den: enc.sample_rate,
         };
-        audio_stream_tb = (*audio_stream).time_base;
         if avcodec_parameters_from_context((*audio_stream).codecpar as *mut _, enc.ctx) < 0 {
             return Err("avcodec_parameters_from_context (audio) failed".into());
         }
@@ -351,6 +348,16 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
     if header_result < 0 {
         return Err(ffmpeg_err("avformat_write_header failed", header_result));
     }
+    // Muxers may replace the requested stream timebases while writing the
+    // header (MP4 changes 1/fps to its own track timescale). Packet timestamps
+    // must be rescaled against those final values or the video collapses to a
+    // few sub-millisecond ticks.
+    let stream_tb = (*stream).time_base;
+    let audio_stream_tb = if audio_stream.is_null() {
+        avformat::AVRational { num: 0, den: 1 }
+    } else {
+        (*audio_stream).time_base
+    };
 
     // --- scale the source frame to a reusable YUV420P frame ---
     let sws = swscale::sws_getContext(

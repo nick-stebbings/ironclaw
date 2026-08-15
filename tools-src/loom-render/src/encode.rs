@@ -198,7 +198,11 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
     let duration = input.duration_sec.unwrap_or(10.0).clamp(1.0, 120.0);
     let n_frames = (duration * fps as f64).round().max(1.0) as i64;
 
-    let (src, _src_guard) = decode_image(input.screenshot)?;
+    let first_screenshot = input
+        .screenshots
+        .first()
+        .ok_or_else(|| "scroll capture returned no frames".to_string())?;
+    let (src, _src_guard) = decode_image(first_screenshot)?;
 
     // Decode and plan audio before choosing the video/container pair. A 44.1
     // kHz MP3 cannot use Opus without resampling, so it must select AAC/MP4.
@@ -389,16 +393,6 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
         return Err("av_frame_get_buffer failed".into());
     }
 
-    swscale::sws_scale(
-        sws,
-        (*src).data.as_ptr() as *const *const u8,
-        (*src).linesize.as_ptr(),
-        0,
-        (*src).height,
-        (*yuv).data.as_ptr(),
-        (*yuv).linesize.as_ptr(),
-    );
-
     let pkt = av_packet_alloc();
     if pkt.is_null() {
         return Err("av_packet_alloc (mux) returned null".into());
@@ -433,6 +427,35 @@ unsafe fn encode_inner(input: &Compose<'_>) -> Result<Composed, String> {
     };
 
     for i in 0..n_frames {
+        let source_index = (i as usize).min(input.screenshots.len() - 1);
+        if source_index == 0 {
+            swscale::sws_scale(
+                sws,
+                (*src).data.as_ptr() as *const *const u8,
+                (*src).linesize.as_ptr(),
+                0,
+                (*src).height,
+                (*yuv).data.as_ptr(),
+                (*yuv).linesize.as_ptr(),
+            );
+        } else if (i as usize) < input.screenshots.len() {
+            let (next_src, _next_guard) = decode_image(&input.screenshots[source_index])?;
+            if (*next_src).width != (*src).width
+                || (*next_src).height != (*src).height
+                || (*next_src).format != (*src).format
+            {
+                return Err("scroll capture frame dimensions changed".to_string());
+            }
+            swscale::sws_scale(
+                sws,
+                (*next_src).data.as_ptr() as *const *const u8,
+                (*next_src).linesize.as_ptr(),
+                0,
+                (*next_src).height,
+                (*yuv).data.as_ptr(),
+                (*yuv).linesize.as_ptr(),
+            );
+        }
         (*yuv).pts = i;
         let r = avcodec_send_frame(vctx, yuv);
         if r < 0 {

@@ -40,10 +40,7 @@ const SCREENSHOT_HOST: &str = "loom-capture.internal";
 // WireGuard-encrypted and /screenshot is unauthenticated, so plain HTTP is fine.
 const SCREENSHOT_PORT: u16 = 8939;
 
-// The visual is a still website capture, so extra frames add no information.
-// One frame per second keeps playback valid while making single-threaded WASM
-// encoding practical within the workflow deadline.
-const DEFAULT_FPS: u32 = 1;
+const FALLBACK_FPS: u32 = 1;
 const MAX_DURATION_SEC: f64 = 120.0;
 
 const SCHEMA: &str = r#"{
@@ -163,11 +160,56 @@ fn fetch_audio(file_id: &str) -> Result<Vec<u8>, String> {
 
 /// Capture the lead's website. Out of sandbox by necessity — there is no browser
 /// in here, and no way to spawn one.
-fn capture_website(url: &str, width: u32, height: u32) -> Result<Vec<u8>, String> {
+struct WebsiteCapture {
+    frames: Vec<Vec<u8>>,
+    fps: u32,
+}
+
+fn parse_scroll_sequence(bytes: &[u8]) -> Result<WebsiteCapture, String> {
+    if bytes.len() < 8 || &bytes[..4] != b"LSF1" {
+        return Err("scroll capture returned an invalid header".to_string());
+    }
+    let fps = u16::from_be_bytes([bytes[4], bytes[5]]) as u32;
+    let count = u16::from_be_bytes([bytes[6], bytes[7]]) as usize;
+    if fps == 0 || count == 0 || count > 60 {
+        return Err("scroll capture returned invalid frame metadata".to_string());
+    }
+    let mut cursor = 8usize;
+    let mut frames = Vec::with_capacity(count);
+    for _ in 0..count {
+        let length_end = cursor
+            .checked_add(4)
+            .ok_or_else(|| "scroll capture frame length overflowed".to_string())?;
+        let raw_length: [u8; 4] = bytes
+            .get(cursor..length_end)
+            .ok_or_else(|| "scroll capture ended before a frame length".to_string())?
+            .try_into()
+            .map_err(|_| "scroll capture frame length was invalid".to_string())?;
+        let length = u32::from_be_bytes(raw_length) as usize;
+        cursor = length_end;
+        let frame_end = cursor
+            .checked_add(length)
+            .ok_or_else(|| "scroll capture frame overflowed".to_string())?;
+        let frame = bytes
+            .get(cursor..frame_end)
+            .ok_or_else(|| "scroll capture ended inside a frame".to_string())?;
+        if frame.is_empty() {
+            return Err("scroll capture returned an empty frame".to_string());
+        }
+        frames.push(frame.to_vec());
+        cursor = frame_end;
+    }
+    if cursor != bytes.len() {
+        return Err("scroll capture returned trailing data".to_string());
+    }
+    Ok(WebsiteCapture { frames, fps })
+}
+
+fn capture_website(url: &str, width: u32, height: u32) -> Result<WebsiteCapture, String> {
     let body = serde_json::json!({ "url": url, "width": width, "height": height });
     let response = host::http_request(
         "POST",
-        &format!("http://{SCREENSHOT_HOST}:{SCREENSHOT_PORT}/screenshot"),
+        &format!("http://{SCREENSHOT_HOST}:{SCREENSHOT_PORT}/scroll-sequence"),
         r#"{"content-type":"application/json"}"#,
         Some(body.to_string().as_bytes()),
         Some(60_000),
@@ -176,14 +218,14 @@ fn capture_website(url: &str, width: u32, height: u32) -> Result<Vec<u8>, String
 
     if response.status < 200 || response.status >= 300 {
         return Err(format!(
-            "screenshot service returned status {}",
+            "scroll capture service returned status {}",
             response.status
         ));
     }
     if response.body.is_empty() {
-        return Err("screenshot service returned an empty image".to_string());
+        return Err("scroll capture service returned an empty response".to_string());
     }
-    Ok(response.body)
+    parse_scroll_sequence(&response.body)
 }
 
 /// Upload the rendered video to Google Drive over HTTP (multipart) and return
@@ -252,14 +294,14 @@ fn execute_inner(params_json: &str) -> Result<String, String> {
     );
 
     let audio = fetch_audio(&params.audio_drive_file_id)?;
-    let screenshot = capture_website(&params.website_url, width, height)?;
+    let capture = capture_website(&params.website_url, width, height)?;
 
     let composed = render::compose(render::Compose {
-        screenshot: &screenshot,
+        screenshots: &capture.frames,
         audio_mp3: &audio,
         width,
         height,
-        fps: DEFAULT_FPS,
+        fps: capture.fps.max(FALLBACK_FPS),
         duration_sec: params.duration_sec,
     })?;
 
@@ -295,7 +337,7 @@ fn execute_inner(params_json: &str) -> Result<String, String> {
 fn error_code(error: &str) -> &'static str {
     if error.starts_with("drive download") || error.starts_with("audio file") {
         "loom_drive_download_failed"
-    } else if error.starts_with("screenshot") {
+    } else if error.starts_with("screenshot") || error.starts_with("scroll capture") {
         "loom_screenshot_failed"
     } else if error.starts_with("drive upload") {
         "loom_drive_upload_failed"
@@ -344,7 +386,7 @@ impl exports::near::agent::tool::Guest for LoomRenderTool {
 
     fn description() -> String {
         "Compose a personalized Loom-style video from a Drive-hosted intro audio track \
-         and a screenshot of the lead's website, then upload the result to Drive. \
+         and a real scrolling capture of the lead's website, then upload the result to Drive. \
          Stage 2 of the Loom outreach pipeline: consumes the audio produced by \
          `personalized-loom-outreach-poc` and returns `video_drive_file_id`. \
          Requires `audio_drive_file_id`, `website_url`, and `drive_output_folder_id`."
@@ -369,6 +411,10 @@ mod tests {
             "loom_screenshot_failed"
         );
         assert_eq!(
+            error_code("scroll capture service returned status 502"),
+            "loom_screenshot_failed"
+        );
+        assert_eq!(
             error_code("drive upload returned status 403"),
             "loom_drive_upload_failed"
         );
@@ -376,6 +422,31 @@ mod tests {
             error_code("video encoder libvpx-vp9 not found"),
             "loom_encode_failed"
         );
+    }
+
+    #[test]
+    fn parses_bounded_scroll_frame_sequence() {
+        let mut bytes = b"LSF1".to_vec();
+        bytes.extend_from_slice(&4u16.to_be_bytes());
+        bytes.extend_from_slice(&2u16.to_be_bytes());
+        for frame in [b"jpeg-a".as_slice(), b"jpeg-b".as_slice()] {
+            bytes.extend_from_slice(&(frame.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(frame);
+        }
+
+        let capture = parse_scroll_sequence(&bytes).unwrap();
+        assert_eq!(capture.fps, 4);
+        assert_eq!(capture.frames, vec![b"jpeg-a".to_vec(), b"jpeg-b".to_vec()]);
+    }
+
+    #[test]
+    fn rejects_truncated_scroll_frame_sequence() {
+        let mut bytes = b"LSF1".to_vec();
+        bytes.extend_from_slice(&4u16.to_be_bytes());
+        bytes.extend_from_slice(&1u16.to_be_bytes());
+        bytes.extend_from_slice(&99u32.to_be_bytes());
+        bytes.extend_from_slice(b"short");
+        assert!(parse_scroll_sequence(&bytes).is_err());
     }
 
     fn params(extra: &str) -> Result<Params, String> {
@@ -410,18 +481,14 @@ mod tests {
 
     #[test]
     fn rejects_out_of_range_duration() {
-        assert!(
-            params(r#","duration_sec":0.5"#)
-                .unwrap()
-                .validate()
-                .is_err()
-        );
-        assert!(
-            params(r#","duration_sec":999"#)
-                .unwrap()
-                .validate()
-                .is_err()
-        );
+        assert!(params(r#","duration_sec":0.5"#)
+            .unwrap()
+            .validate()
+            .is_err());
+        assert!(params(r#","duration_sec":999"#)
+            .unwrap()
+            .validate()
+            .is_err());
         assert!(params(r#","duration_sec":42"#).unwrap().validate().is_ok());
     }
 

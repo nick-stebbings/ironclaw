@@ -133,7 +133,7 @@ fn encoder_exists(_name: &str) -> bool {
 }
 
 pub struct Compose<'a> {
-    pub screenshot: &'a [u8],
+    pub screenshots: &'a [Vec<u8>],
     /// Held for the audio slice (MP3 decode -> Opus encode); unused in slice 1.
     #[allow(dead_code)]
     pub audio_mp3: &'a [u8],
